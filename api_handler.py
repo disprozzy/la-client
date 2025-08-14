@@ -15,7 +15,5 @@ if api_handler.response_data.get('blocked_ips', False) and api_handler.response_
 result = subprocess.run(
     ['git', 'pull', 'origin', 'master'],
     cwd='/opt/la-client',
-    capture_output=True,
-    text=True
 )
     

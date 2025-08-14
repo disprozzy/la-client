@@ -166,7 +166,8 @@ class ApiHandler():
         
         
 def get_server_external_ip():
-    """Get the external IP address of the server from GCP metadata."""
+    """Get the external IP address of the server from GCP metadata.
+        """
     url = "http://metadata/computeMetadata/v1/instance/network-interfaces/0/access-configs/0/external-ip"
     headers = {"Metadata-Flavor": "Google"}
 
