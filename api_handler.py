@@ -1,4 +1,5 @@
 from classes import ApiHandler
+import subprocess
 
 api_handler = ApiHandler()
 
@@ -10,4 +11,11 @@ if api_handler.response_data.get('scan_requested', False):
 
 if api_handler.response_data.get('blocked_ips', False) and api_handler.response_data.get('whitelisted_ips', False):  
     api_handler.process_blocks()
+    
+result = subprocess.run(
+    ['git', 'pull', 'origin', 'master'],
+    cwd='/opt/la-client',
+    capture_output=True,
+    text=True
+)
     
