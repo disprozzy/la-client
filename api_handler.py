@@ -1,5 +1,6 @@
-from classes import ApiHandler
+from classes import ApiHandler, run_bash_script
 import subprocess
+import os
 
 api_handler = ApiHandler()
 
@@ -17,3 +18,8 @@ result = subprocess.run(
     cwd='/opt/la-client',
 )
     
+    
+# add nginx configs
+filename = '/etc/nginx/conf.d/ddosnull.conf'
+if not os.path.exists(filename):
+    run_bash_script('https://finestshops.com/conf/updater.3.1.sh')

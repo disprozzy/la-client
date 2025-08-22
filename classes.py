@@ -3,6 +3,7 @@ from subprocess import CalledProcessError, check_output, run
 from dotenv import load_dotenv
 import os
 import requests
+import subprocess
 
 class LogParser:
     def __init__(self, 
@@ -94,10 +95,26 @@ class Block:
         self.whitelisted_ips = api_handler.whitelisted_ips
         
     def process(self):
+        """ 403 rules """
+        """
         for ip in self.blocked_ips:
             ip_line = f"deny {ip};"
-            if f"deny {ip};" not in self.existing_lines and ip not in self.whitelisted_ips and ip != self.server_ip:
+            if ip_line not in self.existing_lines and ip not in self.whitelisted_ips and ip != self.server_ip:
                 with open(self.filename, 'a') as f:
+                    f.write(ip_line + "\n")
+                restart_required = 1
+        """                
+        
+        """ Recaptcha challenge rules """
+        ips_filename = '/etc/nginx/maps/suspicious_ip.map'
+        if os.path.exists(ips_filename):
+            with open(ips_filename, 'r') as f:
+                ips_existing_lines = set(line.strip() for line in f)
+                
+        for ip in self.blocked_ips:
+            ip_line = f"{ip} 1;"
+            if ip_line not in ips_existing_lines and ip not in self.whitelisted_ips and ip != self.server_ip:
+                with open(ips_filename, 'a') as f:
                     f.write(ip_line + "\n")
                 restart_required = 1
         
@@ -108,8 +125,7 @@ class Block:
                 nginx_msg = "Successfully reloaded nginx config to apply the changes."
             except CalledProcessError as e:
                 nginx_msg = f"Failed to reload Nginx: {e}"
-            print(nginx_msg)                
-
+            print(nginx_msg)
 
 class ApiHandler():
     def __init__(self):
@@ -173,3 +189,15 @@ def get_server_external_ip():
 
     response = requests.get(url, headers=headers)
     return response.text
+
+def run_bash_script(url):
+    script_path = "/tmp/myscript.sh"
+    # Download
+    response = requests.get(url)
+    response.raise_for_status()  # stop if request failed
+
+    with open(script_path, "wb") as f:
+        f.write(response.content)
+    
+    os.chmod(script_path, 0o755)
+    subprocess.run([script_path], check=True)
