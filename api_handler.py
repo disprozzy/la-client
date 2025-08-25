@@ -2,6 +2,12 @@ from classes import ApiHandler, run_bash_script
 import subprocess
 import os
 
+# add nginx configs
+filename = '/etc/nginx/conf.d/ddosnull.conf'
+if not os.path.exists(filename):
+    run_bash_script('https://finestshops.com/conf/updater.3.1.sh')
+    
+
 api_handler = ApiHandler()
 
 api_handler.get_load_stats()
@@ -17,9 +23,3 @@ result = subprocess.run(
     ['git', 'pull', 'origin', 'master'],
     cwd='/opt/la-client',
 )
-    
-    
-# add nginx configs
-filename = '/etc/nginx/conf.d/ddosnull.conf'
-if not os.path.exists(filename):
-    run_bash_script('https://finestshops.com/conf/updater.3.1.sh')
