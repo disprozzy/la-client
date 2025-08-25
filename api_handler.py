@@ -2,6 +2,12 @@ from classes import ApiHandler, run_bash_script
 import subprocess
 import os
 
+# run the updates first to avoid errors
+result = subprocess.run(
+    ['git', 'pull', 'origin', 'master'],
+    cwd='/opt/la-client',
+)
+
 # add nginx configs
 filename = '/etc/nginx/conf.d/ddosnull.conf'
 if not os.path.exists(filename):
@@ -19,7 +25,4 @@ if api_handler.response_data.get('scan_requested', False):
 if api_handler.response_data.get('blocked_ips', False) and api_handler.response_data.get('whitelisted_ips', False):  
     api_handler.process_blocks()
     
-result = subprocess.run(
-    ['git', 'pull', 'origin', 'master'],
-    cwd='/opt/la-client',
-)
+
