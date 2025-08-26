@@ -20,6 +20,7 @@ class LogParser:
         # set time range
         self.end_time = datetime.now()
         self.start_time = self.end_time - timedelta(minutes=self.minutes)
+        self.resart_required = 0
 
         # set log string to check, all logs by default - nginx and apache
         self.log_string = {
@@ -135,7 +136,7 @@ class Block:
             print("Applied DDoS mode.")
             self.restart_required = 1
             
-    def resart_nginx(self):
+    def restart_nginx(self):
         nginx_msg = ''
         if self.restart_required:
             try:
@@ -200,7 +201,7 @@ class ApiHandler():
         block = Block(self)
         block.process()
         block.set_ddos_mode()
-        block.resart_nginx()                   
+        block.restart_nginx()                   
         
 def get_server_external_ip():
     """Get the external IP address of the server from GCP metadata.
