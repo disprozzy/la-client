@@ -127,7 +127,7 @@ class Block:
 
             with open(self.ips_filename, "r+") as f:
                 lines = f.readlines()
-                lines[0] = f'default {int(self.ddos_mode)};'
+                lines[0] = f'default {int(self.ddos_mode)};\n'
                 f.seek(0)
                 f.writelines(lines)
                 f.truncate()
