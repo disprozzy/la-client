@@ -118,6 +118,18 @@ class Block:
                 with open(self.ips_filename, 'a') as f:
                     f.write(ip_line + "\n")
                 self.restart_required = 1
+                
+        # Check if do not have IPs blocked, which are not in DB
+        with open(self.ips_filename, 'w') as f:
+            default_line = f"default {int(self.ddos_mode)};"
+            self.ips_existing_lines.remove(default_line)
+            f.write(f"{default_line}\n")
+            for ip_line in self.ips_existing_lines:
+                if ip_line.split()[0] in self.blocked_ips:
+                    f.write(ip_line + "\n")
+                else:
+                    print(f"{ip_line.split()[0]} should not be blocked. Removing.")
+                    self.restart_required = 1            
             
     def set_ddos_mode(self):
         # Check current mode from file contents
