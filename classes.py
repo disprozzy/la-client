@@ -80,6 +80,7 @@ class LogParser:
 class Block:
     def __init__(self, api_handler):
         self.filename = '/etc/nginx/conf.d/la.conf'
+        self.ips_filename = '/etc/nginx/maps/suspicious_ip.map'
         self.write_mode = 'a' if os.path.exists(self.filename) else 'w'
         self.server_ip = api_handler.server_ip
 
@@ -90,9 +91,14 @@ class Block:
             with open(self.filename, 'a') as f:
                 f.write("#Ban file\n")
             self.existing_lines = set()
+            
+        if os.path.exists(self.ips_filename):
+            with open(self.ips_filename, 'r') as f:
+                self.ips_existing_lines = set(line.strip() for line in f)
 
         self.blocked_ips = api_handler.blocked_ips
         self.whitelisted_ips = api_handler.whitelisted_ips
+        self.ddos_mode = api_handler.ddos_mode
         
     def process(self):
         """ 403 rules """
@@ -104,19 +110,13 @@ class Block:
                     f.write(ip_line + "\n")
                 restart_required = 1
         """                
-        
-        """ Recaptcha challenge rules """
-        ips_filename = '/etc/nginx/maps/suspicious_ip.map'
-        if os.path.exists(ips_filename):
-            with open(ips_filename, 'r') as f:
-                ips_existing_lines = set(line.strip() for line in f)
                 
         for ip in self.blocked_ips:
             ip_line = f"{ip} 1;"
-            if ip_line not in ips_existing_lines and ip not in self.whitelisted_ips and ip != self.server_ip:
-                with open(ips_filename, 'a') as f:
+            if ip_line not in self.ips_existing_lines and ip not in self.whitelisted_ips and ip != self.server_ip:
+                with open(self.ips_filename, 'a') as f:
                     f.write(ip_line + "\n")
-                restart_required = 1
+                self.restart_required = 1
         
         nginx_msg = ''
         if 'restart_required' in locals():
@@ -126,6 +126,24 @@ class Block:
             except CalledProcessError as e:
                 nginx_msg = f"Failed to reload Nginx: {e}"
             print(nginx_msg)
+            
+    def set_ddos_mode(self):
+        # Check current mode from file contents
+        current_mode = "default 1;" in self.ips_existing_lines
+        print(current_mode)
+        print(self.ddos_mode)
+        print(self.ips_existing_lines)
+
+        # Only update file if state changed
+        if current_mode != self.ddos_mode:
+
+            with open(self.ips_filename, "r+") as f:
+                lines = f.readlines()
+                lines[0] = f'default {int(self.ddos_mode)};'
+                f.seek(0)
+                f.writelines(lines)
+                f.truncate()
+        
 
 class ApiHandler():
     def __init__(self):
@@ -177,9 +195,10 @@ class ApiHandler():
     def process_blocks(self):
         self.blocked_ips = self.response_data['blocked_ips']
         self.whitelisted_ips = self.response_data['whitelisted_ips']
+        self.ddos_mode = self.response_data['ddos_mode']
         block = Block(self)
         block.process()
-        
+        block.set_ddos_mode()                    
         
 def get_server_external_ip():
     """Get the external IP address of the server from GCP metadata.
