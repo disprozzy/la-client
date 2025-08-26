@@ -199,7 +199,8 @@ class ApiHandler():
         self.ddos_mode = self.response_data['ddos_mode']
         block = Block(self)
         block.process()
-        block.set_ddos_mode()                    
+        block.set_ddos_mode()
+        block.resart_nginx()                   
         
 def get_server_external_ip():
     """Get the external IP address of the server from GCP metadata.
