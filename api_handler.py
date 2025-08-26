@@ -22,5 +22,4 @@ api_handler.submit_load_stats()
 if api_handler.response_data.get('scan_requested', False):
     api_handler.submit_log_data()
 
-if api_handler.response_data.get('ddos_mode', False) or (api_handler.response_data.get('blocked_ips', False) and api_handler.response_data.get('whitelisted_ips', False)):  
-    api_handler.process_blocks()    
+api_handler.process_blocks()    
