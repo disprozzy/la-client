@@ -20,7 +20,6 @@ class LogParser:
         # set time range
         self.end_time = datetime.now()
         self.start_time = self.end_time - timedelta(minutes=self.minutes)
-        self.resart_required = 0
 
         # set log string to check, all logs by default - nginx and apache
         self.log_string = {
@@ -84,6 +83,7 @@ class Block:
         self.ips_filename = '/etc/nginx/maps/suspicious_ip.map'
         self.write_mode = 'a' if os.path.exists(self.filename) else 'w'
         self.server_ip = api_handler.server_ip
+        self.restart_required = 0
 
         if os.path.exists(self.filename):
             with open(self.filename, 'r') as f:
