@@ -120,11 +120,15 @@ class Block:
                 self.restart_required = 1
                 
         # Check if do not have IPs blocked, which are not in DB
+        # load updates ip lines
+        if os.path.exists(self.ips_filename):
+            with open(self.ips_filename, 'r') as f:
+                ips_existing_lines_updated = set(line.strip() for line in f)
         with open(self.ips_filename, 'w') as f:
             default_line = f"default {int(self.ddos_mode)};"
-            self.ips_existing_lines.remove(default_line)
+            ips_existing_lines_updated.remove(default_line)
             f.write(f"{default_line}\n")
-            for ip_line in self.ips_existing_lines:
+            for ip_line in ips_existing_lines_updated:
                 if ip_line.split()[0] in self.blocked_ips:
                     f.write(ip_line + "\n")
                 else:
