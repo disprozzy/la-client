@@ -117,22 +117,10 @@ class Block:
                 with open(self.ips_filename, 'a') as f:
                     f.write(ip_line + "\n")
                 self.restart_required = 1
-        
-        nginx_msg = ''
-        if 'restart_required' in locals():
-            try:
-                run(["sudo", "systemctl", "reload", "nginx"], check=True)
-                nginx_msg = "Successfully reloaded nginx config to apply the changes."
-            except CalledProcessError as e:
-                nginx_msg = f"Failed to reload Nginx: {e}"
-            print(nginx_msg)
             
     def set_ddos_mode(self):
         # Check current mode from file contents
         current_mode = "default 1;" in self.ips_existing_lines
-        print(current_mode)
-        print(self.ddos_mode)
-        print(self.ips_existing_lines)
 
         # Only update file if state changed
         if current_mode != self.ddos_mode:
@@ -143,6 +131,19 @@ class Block:
                 f.seek(0)
                 f.writelines(lines)
                 f.truncate()
+            
+            print("Applied DDoS mode.")
+            self.restart_required = 1
+            
+    def resart_nginx(self):
+        nginx_msg = ''
+        if self.restart_required:
+            try:
+                run(["sudo", "systemctl", "reload", "nginx"], check=True)
+                nginx_msg = "Successfully reloaded nginx config to apply the changes."
+            except CalledProcessError as e:
+                nginx_msg = f"Failed to reload Nginx: {e}"
+            print(nginx_msg)            
         
 
 class ApiHandler():
@@ -193,8 +194,8 @@ class ApiHandler():
         print(log_data_response['message'])
         
     def process_blocks(self):
-        self.blocked_ips = self.response_data['blocked_ips']
-        self.whitelisted_ips = self.response_data['whitelisted_ips']
+        self.blocked_ips = self.response_data.get('blocked_ips', [])
+        self.whitelisted_ips = self.response_data.get('whitelisted_ips', [])
         self.ddos_mode = self.response_data['ddos_mode']
         block = Block(self)
         block.process()
