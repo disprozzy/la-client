@@ -114,7 +114,7 @@ class Block:
     def __init__(self, api_handler):
         self.filename = '/etc/nginx/conf.d/la.conf'
         self.ips_filename = '/etc/nginx/maps/suspicious_ip.map'
-        self.ddos_filenam = '/etc/nginx/maps/ddos_mode.map'
+        self.ddos_filename = '/etc/nginx/maps/ddos_mode.map'
         self.write_mode = 'a' if os.path.exists(self.filename) else 'w'
         self.server_ip = api_handler.server_ip
         self.restart_required = 0
