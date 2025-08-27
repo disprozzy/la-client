@@ -76,7 +76,40 @@ class LogParser:
         # convert the list of uniq IPs to count
         for domain_name in self.requests_by_domain:
             self.requests_by_domain[domain_name]['uniq_ips'] = len(self.requests_by_domain[domain_name]['uniq_ips'])
+            
+    def process_checkout_ips(self):
+        """ Parse the logs and get a list of IP with number of orders submitted 
+            Blacklist the IP if submitted more than order per hour
+        """
+        checkout_logs = []
+        ips_count = {}
+        suspicious_checkout_ips = []
+        patterns = [
+            'POST /?wc-ajax=checkout',
+            'GET /wonders-search-result.php?search=test'
+        ]
 
+        for line in self.filtered_logs:
+            for pattern in patterns:
+                if pattern in line:
+                    checkout_logs.append(line)
+                    
+        for i, line in enumerate(checkout_logs, 1):
+            elements = line.split()
+            ip = elements[0]
+            if ip in ips_count:
+                ips_count[ip] += 1
+            else:
+                ips_count[ip] = 1
+                
+        # we'll replace this to a setting later to adjust how many orders an IP can place before we block it
+        for ip in ips_count.keys():
+            if ips_count[ip] > 1:
+                suspicious_checkout_ips.append(ip)
+                
+        return suspicious_checkout_ips
+                
+                        
 class Block:
     def __init__(self, api_handler):
         self.filename = '/etc/nginx/conf.d/la.conf'
@@ -157,7 +190,7 @@ class Block:
         if self.restart_required:
             try:
                 run(["sudo", "systemctl", "reload", "nginx"], check=True)
-                nginx_msg = "Successfully reloaded nginx config to apply the changes."
+                nginx_msg = "Got updates for the block lists. Successfully reloaded nginx config to apply the changes."
             except CalledProcessError as e:
                 nginx_msg = f"Failed to reload Nginx: {e}"
             print(nginx_msg)            
@@ -169,6 +202,23 @@ class ApiHandler():
         self.api_url = os.getenv("API_URL", "")
         self.instance_id = os.getenv("INSTANCE_ID", "")
         self.server_ip = get_server_external_ip()
+    
+    def check_checkout_requests(self):
+        parser = LogParser(minutes=60)
+        parser.parse_logs()
+        self.suspicious_checkout_ips = parser.process_checkout_ips()
+        
+        if self.suspicious_checkout_ips:
+            payload = {
+                'datatype': 'suspicious_checkout_ips',
+                'instance_id': self.instance_id,
+                'suspicious_checkout_ips': self.suspicious_checkout_ips,
+            }
+            
+            response = requests.post(self.api_url, json=payload)
+            self.response_data = response.json()
+            
+            print(self.response_data['message'])
         
     def get_load_stats(self):
         response = requests.get('http://127.0.0.1:80/nginx_status')
@@ -217,7 +267,7 @@ class ApiHandler():
         block = Block(self)
         block.process()
         block.set_ddos_mode()
-        block.restart_nginx()                   
+        block.restart_nginx()                            
         
 def get_server_external_ip():
     """Get the external IP address of the server from GCP metadata.

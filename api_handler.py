@@ -19,6 +19,9 @@ api_handler = ApiHandler()
 api_handler.get_load_stats()
 api_handler.submit_load_stats()
 
+if api_handler.response_data.get('checkout_protected', False):
+    api_handler.check_checkout_requests()
+
 if api_handler.response_data.get('scan_requested', False):
     api_handler.submit_log_data()
 
