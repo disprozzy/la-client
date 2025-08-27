@@ -160,7 +160,8 @@ class Block:
                 ips_existing_lines_updated = set(line.strip() for line in f)
         with open(self.ips_filename, 'w') as f:
             default_line = f"default 0;"
-            ips_existing_lines_updated.remove(default_line)
+            if default_line in ips_existing_lines_updated:
+                ips_existing_lines_updated.remove(default_line)
             f.write(f"{default_line}\n")
             for ip_line in ips_existing_lines_updated:
                 if ip_line.split()[0] in self.blocked_ips:
