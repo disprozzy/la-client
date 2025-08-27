@@ -127,6 +127,10 @@ class Block:
                 f.write("#Ban file\n")
             self.existing_lines = set()
             
+        if os.path.exists(self.ddos_filename):
+            with open(self.ddos_filename, 'r') as f:
+                self.ddos_existing_lines = set(line.strip() for line in f)
+        
         if os.path.exists(self.ips_filename):
             with open(self.ips_filename, 'r') as f:
                 self.ips_existing_lines = set(line.strip() for line in f)
@@ -172,7 +176,7 @@ class Block:
             
     def set_ddos_mode(self):
         # Check current mode from file contents
-        current_mode = "default 1;" in self.ips_existing_lines
+        current_mode = "default 1;" in self.ddos_existing_lines
 
         # Only update file if state changed
         if current_mode != self.ddos_mode:
