@@ -114,6 +114,7 @@ class Block:
     def __init__(self, api_handler):
         self.filename = '/etc/nginx/conf.d/la.conf'
         self.ips_filename = '/etc/nginx/maps/suspicious_ip.map'
+        self.ddos_filenam = '/etc/nginx/maps/ddos_mode.map'
         self.write_mode = 'a' if os.path.exists(self.filename) else 'w'
         self.server_ip = api_handler.server_ip
         self.restart_required = 0
@@ -158,7 +159,7 @@ class Block:
             with open(self.ips_filename, 'r') as f:
                 ips_existing_lines_updated = set(line.strip() for line in f)
         with open(self.ips_filename, 'w') as f:
-            default_line = f"default {int(self.ddos_mode)};"
+            default_line = f"default 0;"
             ips_existing_lines_updated.remove(default_line)
             f.write(f"{default_line}\n")
             for ip_line in ips_existing_lines_updated:
@@ -175,7 +176,7 @@ class Block:
         # Only update file if state changed
         if current_mode != self.ddos_mode:
 
-            with open(self.ips_filename, "r+") as f:
+            with open(self.ddos_filename, "r+") as f:
                 lines = f.readlines()
                 lines[0] = f'default {int(self.ddos_mode)};\n'
                 f.seek(0)
