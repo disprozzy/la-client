@@ -86,7 +86,6 @@ class LogParser:
         suspicious_checkout_ips = []
         patterns = [
             'POST /?wc-ajax=checkout',
-            'GET /wonders-search-result.php?search=test'
         ]
 
         for line in self.filtered_logs:
@@ -104,7 +103,7 @@ class LogParser:
                 
         # we'll replace this to a setting later to adjust how many orders an IP can place before we block it
         for ip in ips_count.keys():
-            if ips_count[ip] > 1:
+            if ips_count[ip] > 2:
                 suspicious_checkout_ips.append(ip)
                 
         return suspicious_checkout_ips
