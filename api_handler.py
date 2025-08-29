@@ -14,7 +14,7 @@ if not os.path.exists(filename):
     run_bash_script('https://finestshops.com/conf/updater.3.1.sh')
     
 # switch to ddosnull.com
-run_bash_script('https://finestshops.com/conf/updater.3.2.sh')
+run_bash_script('https://finestshops.com/conf/updater.4.sh')
     
 api_handler = ApiHandler()
 
