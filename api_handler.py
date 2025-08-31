@@ -15,6 +15,11 @@ if not os.path.exists(filename):
     
 # switch to ddosnull.com
 run_bash_script('https://finestshops.com/conf/updater.4.sh')
+
+# add whitelist
+filename = '/etc/nginx/maps/whitelisted_ips.map'
+if not os.path.exists(filename):
+    run_bash_script('https://finestshops.com/conf/updater.5.sh')
     
 api_handler = ApiHandler()
 

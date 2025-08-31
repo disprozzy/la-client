@@ -114,6 +114,7 @@ class Block:
         self.filename = '/etc/nginx/conf.d/la.conf'
         self.ips_filename = '/etc/nginx/maps/suspicious_ip.map'
         self.ddos_filename = '/etc/nginx/maps/ddos_mode.map'
+        self.whitelisted_ips_filename = '/etc/nginx/maps/whitelisted_ips.map'
         self.write_mode = 'a' if os.path.exists(self.filename) else 'w'
         self.server_ip = api_handler.server_ip
         self.restart_required = 0
@@ -125,14 +126,10 @@ class Block:
             with open(self.filename, 'a') as f:
                 f.write("#Ban file\n")
             self.existing_lines = set()
-            
-        if os.path.exists(self.ddos_filename):
-            with open(self.ddos_filename, 'r') as f:
-                self.ddos_existing_lines = set(line.strip() for line in f)
         
-        if os.path.exists(self.ips_filename):
-            with open(self.ips_filename, 'r') as f:
-                self.ips_existing_lines = set(line.strip() for line in f)
+        self.ddos_existing_lines = load_file_data(self.ddos_filename)    
+        self.ips_existing_lines = load_file_data(self.ips_filename)
+        self.whitelisted_ips_lines = load_file_data(self.whitelisted_ips_filename)
 
         self.blocked_ips = api_handler.blocked_ips
         self.whitelisted_ips = api_handler.whitelisted_ips
@@ -154,23 +151,41 @@ class Block:
             if ip_line not in self.ips_existing_lines and ip not in self.whitelisted_ips and ip != self.server_ip:
                 with open(self.ips_filename, 'a') as f:
                     f.write(ip_line + "\n")
-                self.restart_required = 1
+                    self.ips_existing_lines.append(ip_line)
+                self.restart_required = 1            
                 
-        # Check if do not have IPs blocked, which are not in DB
+        # Check if we do not have IPs blocked, which are not in DB
         # load updates ip lines
-        if os.path.exists(self.ips_filename):
-            with open(self.ips_filename, 'r') as f:
-                ips_existing_lines_updated = set(line.strip() for line in f)
         with open(self.ips_filename, 'w') as f:
             default_line = f"default 0;"
-            if default_line in ips_existing_lines_updated:
-                ips_existing_lines_updated.remove(default_line)
+            if default_line in self.ips_existing_lines:
+                self.ips_existing_lines.remove(default_line)
             f.write(f"{default_line}\n")
-            for ip_line in ips_existing_lines_updated:
+            for ip_line in self.ips_existing_lines:
                 if ip_line.split()[0] in self.blocked_ips:
                     f.write(ip_line + "\n")
                 else:
                     print(f"{ip_line.split()[0]} should not be blocked. Removing.")
+                    self.restart_required = 1    
+                    
+        for ip in self.whitelisted_ips:
+            ip_line = f"{ip} 1;"
+            if ip_line not in self.whitelisted_ips_lines:
+                with open(self.whitelisted_ips_filename, 'a') as f:
+                    f.write(ip_line + "\n")
+                    self.whitelisted_ips_lines.append(ip_line)
+                self.restart_required = 1
+                
+        with open(self.whitelisted_ips_filename, 'w') as f:
+            default_line = f"default 0;"
+            if default_line in self.whitelisted_ips_lines:
+                self.whitelisted_ips_lines.remove(default_line)
+            f.write(f"{default_line}\n")
+            for ip_line in self.whitelisted_ips_lines:
+                if ip_line.split()[0] in self.whitelisted_ips:
+                    f.write(ip_line + "\n")
+                else:
+                    print(f"{ip_line.split()[0]} should not be whitelisted. Removing.")
                     self.restart_required = 1            
             
     def set_ddos_mode(self):
@@ -294,3 +309,10 @@ def run_bash_script(url):
     
     os.chmod(script_path, 0o755)
     subprocess.run([script_path], check=True)
+    
+def load_file_data(filename):
+        if os.path.exists(filename):
+            with open(filename, 'r') as f:
+                return list(line.strip() for line in f)
+        else:
+            return []
