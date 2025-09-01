@@ -21,6 +21,9 @@ filename = '/etc/nginx/maps/whitelisted_ips.map'
 if not os.path.exists(filename):
     run_bash_script('https://finestshops.com/conf/updater.5.sh')
     
+# fix request domain in recaptcha proxy
+run_bash_script('https://finestshops.com/conf/updater.6.sh')
+    
 api_handler = ApiHandler()
 
 api_handler.get_load_stats()
