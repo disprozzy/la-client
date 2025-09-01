@@ -66,7 +66,10 @@ class LogParser:
             # Filter log lines in time range
             for line in log_lines:
                 log_time = self.get_log_time(line)
-                response_code = line.split('"')[2].strip().split()[0]
+                try:
+                    response_code = line.split('"')[2].strip().split()[0]
+                except:
+                    response_code = 200
                 if (log_time and self.start_time <= log_time <= self.end_time and
                         (self.code == '' or self.code == response_code)):
                     self.filtered_logs.append(line)
