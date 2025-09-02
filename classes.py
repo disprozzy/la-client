@@ -285,7 +285,7 @@ class ApiHandler():
         
     def process_blocks(self):
         self.blocked_ips = self.response_data.get('blocked_ips', [])
-        self.whitelisted_ips = self.response_data.get('whitelisted_ips', [])
+        self.whitelisted_ips = self.response_data.get('whitelisted_ips', []) + [self.server_ip]
         self.ddos_mode = self.response_data['ddos_mode']
         block = Block(self)
         block.process()
