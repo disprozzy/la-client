@@ -7,25 +7,6 @@ result = subprocess.run(
     ['git', 'pull', 'origin', 'master'],
     cwd='/opt/la-client',
 )
-
-# add nginx configs
-#filename = '/etc/nginx/conf.d/ddosnull.conf'
-#if not os.path.exists(filename):
-#    run_bash_script('https://finestshops.com/conf/updater.3.1.sh')
-    
-# switch to ddosnull.com
-#run_bash_script('https://finestshops.com/conf/updater.4.sh')
-
-# add whitelist
-#filename = '/etc/nginx/maps/whitelisted_ips.map'
-#if not os.path.exists(filename):
-#    run_bash_script('https://finestshops.com/conf/updater.5.sh')
-    
-# fix request domain in recaptcha proxy
-#run_bash_script('https://finestshops.com/conf/updater.6.sh')
-
-# fix default template
-run_bash_script('https://finestshops.com/conf/updater.7.sh')
     
 api_handler = ApiHandler()
 
