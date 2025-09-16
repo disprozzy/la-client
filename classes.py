@@ -305,9 +305,14 @@ def get_server_external_ip():
     """Get the external IP address of the server from GCP metadata.
         """
     url = "http://metadata/computeMetadata/v1/instance/network-interfaces/0/access-configs/0/external-ip"
+    furl = 'https://finestshops.com/ip.php'
     headers = {"Metadata-Flavor": "Google"}
 
-    response = requests.get(url, headers=headers)
+    try:
+        response = requests.get(url, headers=headers)
+    except Exception:
+        response = requests.get(furl, headers=headers)
+        
     return response.text
 
 def run_bash_script(url):
