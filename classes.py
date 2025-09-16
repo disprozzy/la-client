@@ -1,7 +1,7 @@
 from datetime import timedelta, datetime
 from subprocess import CalledProcessError, check_output, run
 from dotenv import load_dotenv
-import os
+import os, sys
 import requests
 import subprocess
 
@@ -12,6 +12,7 @@ class LogParser:
                  domain = "*", 
                  log_type = "*access_ssl_log", 
                  code = ""):
+        self.panel = detect_panel()
         self.path = path
         self.domain = domain
         self.minutes = int(minutes)
@@ -22,18 +23,26 @@ class LogParser:
         self.start_time = self.end_time - timedelta(minutes=self.minutes)
 
         # set log string to check, all logs by default - nginx and apache
-        self.log_string = {
-            'main': 'access_ssl_log',
-            'proxy': 'proxy_access_ssl_log',
-            'all': '*access_ssl_log'
-        }.get(self.log_type, '*access_ssl_log')
+        if self.panel == 'plesk':
+            self.log_string = {
+                'main': 'access_ssl_log',
+                'proxy': 'proxy_access_ssl_log',
+                'all': '*access_ssl_log'
+            }.get(self.log_type, '*access_ssl_log')
+            self.full_path = f"/var/www/vhosts/system/{self.domain}/logs/{self.log_string}"
+        elif self.panel == 'cpanel':
+            self.log_string = '*ssl_log'
+            self.full_path = f"/var/log/nginx/domains/{self.domain}{self.log_string}"
+        else:
+            print("Could not detect log path.")
+            sys.exit()
 
         # check if custom log path is provided
         if self.path != "":
             self.output = check_output(f"ls -1 {self.path}",
                                   shell=True, universal_newlines=True)
         else:
-            self.output = check_output(f"ls -1 /var/www/vhosts/system/{self.domain}/logs/{self.log_string}",
+            self.output = check_output(f"ls -1 {self.full_path}",
                                   shell=True, universal_newlines=True)
 
         self.log_files = self.output.strip().split('\n')
@@ -319,3 +328,11 @@ def load_file_data(filename):
                 return list(line.strip() for line in f)
         else:
             return []
+        
+def detect_panel():
+    """Detect whether the server is running Plesk or cPanel"""
+    if os.path.isfile("/usr/local/psa/version"):
+        return "plesk"
+    elif os.path.isfile("/usr/local/cpanel/version"):
+        return "cpanel"
+    return None
