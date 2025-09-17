@@ -62,7 +62,10 @@ class LogParser:
         for i, log_file in enumerate(self.log_files, 1):
             # Get domain name from log path
             try:
-                domain_name = log_file.split('/system/')[1].split('/')[0]
+                if self.panel == 'plesk':
+                    domain_name = log_file.split('/system/')[1].split('/')[0]
+                elif self.panel == 'cpanel':
+                    domain_name = log_file.split('/domains/')[1].split('-')[0]
             except:
                 domain_name = "not found"
 
