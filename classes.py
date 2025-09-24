@@ -149,6 +149,7 @@ class Block:
         self.blocked_ips = api_handler.blocked_ips
         self.whitelisted_ips = api_handler.whitelisted_ips
         self.ddos_mode = api_handler.ddos_mode
+        self.disable_all_blocks = api_handler.disable_all_blocks
         
     def process(self):
         """ 403 rules """
@@ -192,7 +193,7 @@ class Block:
                 self.restart_required = 1
                 
         with open(self.whitelisted_ips_filename, 'w') as f:
-            default_line = f"default 0;"
+            default_line = "default 1;" if self.disable_all_blocks else "default 0;"
             if default_line in self.whitelisted_ips_lines:
                 self.whitelisted_ips_lines.remove(default_line)
             f.write(f"{default_line}\n")
@@ -299,6 +300,7 @@ class ApiHandler():
         self.blocked_ips = self.response_data.get('blocked_ips', [])
         self.whitelisted_ips = self.response_data.get('whitelisted_ips', []) + [self.server_ip]
         self.ddos_mode = self.response_data['ddos_mode']
+        self.disable_all_blocks = self.response_data['disable_all_blocks']
         block = Block(self)
         block.process()
         block.set_ddos_mode()
