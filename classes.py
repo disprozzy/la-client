@@ -1,4 +1,4 @@
-from datetime import timedelta, datetime
+from datetime import timedelta, datetime, timezone
 from subprocess import CalledProcessError, check_output, run
 from dotenv import load_dotenv
 import os, sys
@@ -21,6 +21,10 @@ class LogParser:
         # set time range
         self.end_time = datetime.now()
         self.start_time = self.end_time - timedelta(minutes=self.minutes)
+        self.checkout_patterns = [
+            'POST /?wc-ajax=checkout',
+            'GET /random'
+        ]
 
         # set log string to check, all logs by default - nginx and apache
         if self.panel == 'plesk':
@@ -96,32 +100,27 @@ class LogParser:
         """ Parse the logs and get a list of IP with number of orders submitted 
             Blacklist the IP if submitted more than order per hour
         """
-        checkout_logs = []
-        ips_count = {}
-        suspicious_checkout_ips = []
-        patterns = [
-            'POST /?wc-ajax=checkout',
-        ]
+        self.checkout_logs = []
+        self.ips_count = {}
+        self.suspicious_checkout_ips = []
 
         for line in self.filtered_logs:
-            for pattern in patterns:
+            for pattern in self.checkout_patterns:
                 if pattern in line:
-                    checkout_logs.append(line)
+                    self.checkout_logs.append(line)
                     
-        for i, line in enumerate(checkout_logs, 1):
+        for i, line in enumerate(self.checkout_logs, 1):
             elements = line.split()
             ip = elements[0]
-            if ip in ips_count:
-                ips_count[ip] += 1
+            if ip in self.ips_count:
+                self.ips_count[ip] += 1
             else:
-                ips_count[ip] = 1
+                self.ips_count[ip] = 1
                 
         # we'll replace this to a setting later to adjust how many orders an IP can place before we block it
-        for ip in ips_count.keys():
-            if ips_count[ip] > 2:
-                suspicious_checkout_ips.append(ip)
-                
-        return suspicious_checkout_ips
+        for ip in self.ips_count.keys():
+            if self.ips_count[ip] > 2:
+                self.suspicious_checkout_ips.append(ip)
                 
                         
 class Block:
@@ -240,22 +239,63 @@ class ApiHandler():
         self.server_ip = get_server_external_ip()
     
     def check_checkout_requests(self):
-        parser = LogParser(minutes=60)
-        parser.parse_logs()
-        self.suspicious_checkout_ips = parser.process_checkout_ips()
-        
-        if self.suspicious_checkout_ips:
-            payload = {
-                'datatype': 'suspicious_checkout_ips',
-                'instance_id': self.instance_id,
-                'suspicious_checkout_ips': self.suspicious_checkout_ips,
-            }
+        ddos_mode = self.response_data['ddos_mode']
+        if not ddos_mode:
+            parser = LogParser(minutes=60)
+            parser.parse_logs()
+            parser.process_checkout_ips()
+            self.suspicious_checkout_ips = parser.suspicious_checkout_ips
             
-            response = requests.post(self.api_url, json=payload)
+            if self.suspicious_checkout_ips:
+                payload = {
+                    'datatype': 'suspicious_checkout_ips',
+                    'instance_id': self.instance_id,
+                    'suspicious_checkout_ips': self.suspicious_checkout_ips,
+                }
+                
+                response = requests.post(self.api_url, json=payload)
+                self.susp_response_data = response.json()
+                
+                print(self.susp_response_data['message'])
+        
+        """ Auto ddos mode
+            Enable if too many ips are submitting request to checkout
+            """
+        auto_ddos_enabled_at = datetime.fromisoformat(self.response_data['auto_ddos_enabled_at'].replace("Z", "+00:00")) if self.response_data['auto_ddos_enabled_at'] else None
+        auto_ddos_timeout = self.response_data['auto_ddos_timeout']
+        checkout_requests = self.response_data['checkout_requests']
+        now_utc = datetime.now(timezone.utc)
+        
+        if not auto_ddos_enabled_at:
+            parser = LogParser(minutes=10)
+            parser.parse_logs()
+            parser.process_checkout_ips()
+            
+            if (
+                len(parser.checkout_logs) > checkout_requests 
+                and len(parser.ips_count) > 1
+            ):
+                auto_ddos_payload = {
+                'datatype': 'auto_ddos_mode',
+                'instance_id': self.instance_id,
+                'auto_ddos_mode': True,
+                }
+            
+
+        elif auto_ddos_enabled_at + timedelta(minutes=auto_ddos_timeout) < now_utc:
+            auto_ddos_payload = {
+                'datatype': 'auto_ddos_mode',
+                'instance_id': self.instance_id,
+                'auto_ddos_mode': False,
+                }
+        
+        if "auto_ddos_payload" in locals():
+            response = requests.post(self.api_url, json=auto_ddos_payload)
             self.response_data = response.json()
             
             print(self.response_data['message'])
-        
+            
+                            
     def get_load_stats(self):
         response = requests.get('http://127.0.0.1:80/nginx_status')
         if response.status_code == 200:
