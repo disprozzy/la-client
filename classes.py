@@ -149,6 +149,7 @@ class Block:
         self.blocked_ips = api_handler.blocked_ips
         self.whitelisted_ips = api_handler.whitelisted_ips
         self.ddos_mode = api_handler.ddos_mode
+        self.ddos_mode_hosts = api_handler.ddos_mode_hosts
         self.disable_all_blocks = api_handler.disable_all_blocks
         
     def process(self):
@@ -205,21 +206,37 @@ class Block:
                     self.restart_required = 1            
             
     def set_ddos_mode(self):
-        # Check current mode from file contents
-        current_mode = "default 1;" in self.ddos_existing_lines
+        # No hosts mode
+        if not self.ddos_mode_hosts:
+            # Check current mode from file contents
+            current_mode = "default 1;" in self.ddos_existing_lines
 
-        # Only update file if state changed
-        if current_mode != self.ddos_mode:
+            # Only update file if state changed
+            if current_mode != self.ddos_mode:
 
-            with open(self.ddos_filename, "r+") as f:
-                lines = f.readlines()
-                lines[0] = f'default {int(self.ddos_mode)};\n'
-                f.seek(0)
-                f.writelines(lines)
-                f.truncate()
+                with open(self.ddos_filename, "w") as f:
+                    f.write(f"default 0;\n")
+                
+                print("Applied DDoS mode for all websites.")
+                self.restart_required = 1
+        else:
+            if "default 0;" not in self.ddos_existing_lines:
+                with open(self.ddos_filename, "w") as f:
+                    f.write(f"default 0;\n")
+                self.restart_required = 1
+                     
+            for domain in self.ddos_mode_hosts:
+                if f"{domain} 1;" not in self.ddos_existing_lines:
+                    with open(self.ddos_filename, "a") as f:
+                        f.write(f"{domain} 1;\n")
+                    self.restart_required = 1
+                if f"www.{domain} 1;" not in self.ddos_existing_lines:
+                    with open(self.ddos_filename, "a") as f:
+                        f.write(f"www.{domain} 1;\n")
+                    self.restart_required = 1
+                    print(f"Applied DDoS mode for {domain}.")         
             
-            print("Applied DDoS mode.")
-            self.restart_required = 1
+            
             
     def restart_nginx(self):
         nginx_msg = ''
@@ -263,9 +280,7 @@ class ApiHandler():
             Enable if too many ips are submitting request to checkout
             """
         auto_ddos_enabled_at = datetime.fromisoformat(self.response_data['auto_ddos_enabled_at'].replace("Z", "+00:00")) if self.response_data['auto_ddos_enabled_at'] else None
-        auto_ddos_timeout = self.response_data['auto_ddos_timeout']
         checkout_requests = self.response_data['checkout_requests']
-        now_utc = datetime.now(timezone.utc)
         
         if not auto_ddos_enabled_at:
             parser = LogParser(minutes=10)
@@ -350,6 +365,7 @@ class ApiHandler():
         self.blocked_ips = self.response_data.get('blocked_ips', [])
         self.whitelisted_ips = self.response_data.get('whitelisted_ips', []) + [self.server_ip]
         self.ddos_mode = self.response_data['ddos_mode']
+        self.ddos_mode_hosts = self.response_data['ddos_mode_hosts']
         self.disable_all_blocks = self.response_data['disable_all_blocks']
         block = Block(self)
         block.process()
