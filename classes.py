@@ -326,7 +326,7 @@ class ApiHandler():
         
         print(self.response_data['message'])
         
-        self.auto_ddos_enabled_at = datetime.fromisoformat(self.response_data['auto_ddos_enabled_at'].replace("Z", "+00:00")) if self.response_data['auto_ddos_enabled_at'] else None
+        self.auto_ddos_enabled_at = self.response_data['auto_ddos_enabled_at'] if self.response_data['auto_ddos_enabled_at'] else None
         self.auto_ddos_timeout = self.response_data['auto_ddos_timeout'] if self.response_data['auto_ddos_timeout'] else None
         self.now_utc = datetime.now(timezone.utc)
         
