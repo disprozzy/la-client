@@ -326,7 +326,14 @@ class ApiHandler():
         
         print(self.response_data['message'])
         
-        self.auto_ddos_enabled_at = self.response_data['auto_ddos_enabled_at'] if self.response_data['auto_ddos_enabled_at'] else None
+        ts = self.response_data.get('auto_ddos_enabled_at')
+        if ts:
+            ts = ts.replace("Z", "+00:00")
+            if ts[-3] == ":":
+                ts = ts[:-3] + ts[-2:]  # remove colon in timezone for Python 3.6
+            self.auto_ddos_enabled_at = datetime.strptime(ts, "%Y-%m-%dT%H:%M:%S.%f%z")
+        else:
+            self.auto_ddos_enabled_at = None
         self.auto_ddos_timeout = self.response_data['auto_ddos_timeout'] if self.response_data['auto_ddos_timeout'] else None
         self.now_utc = datetime.now(timezone.utc)
         
