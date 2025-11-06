@@ -95,6 +95,7 @@ class LogParser:
         # convert the list of uniq IPs to count
         for domain_name in self.requests_by_domain:
             self.requests_by_domain[domain_name]['uniq_ips'] = len(self.requests_by_domain[domain_name]['uniq_ips'])
+        
             
     def process_checkout_ips(self):
         """ Parse the logs and get a list of IP with number of orders submitted 
@@ -276,24 +277,15 @@ class ApiHandler():
                 and len(parser.ips_count) > 1
             ):
                 auto_ddos_payload = {
-                'datatype': 'auto_ddos_mode',
-                'instance_id': self.instance_id,
-                'auto_ddos_mode': True,
-                }
-            
-
-        elif auto_ddos_enabled_at + timedelta(minutes=auto_ddos_timeout) < now_utc:
-            auto_ddos_payload = {
-                'datatype': 'auto_ddos_mode',
-                'instance_id': self.instance_id,
-                'auto_ddos_mode': False,
-                }
-        
-        if "auto_ddos_payload" in locals():
-            response = requests.post(self.api_url, json=auto_ddos_payload)
-            self.response_data = response.json()
-            
-            print(self.response_data['message'])
+                    'datatype': 'auto_ddos_mode',
+                    'instance_id': self.instance_id,
+                    'auto_ddos_mode': True,
+                    }
+                
+                response = requests.post(self.api_url, json=auto_ddos_payload)
+                self.response_data = response.json()
+                
+                print(self.response_data['message'])
             
                             
     def get_load_stats(self):
@@ -318,6 +310,24 @@ class ApiHandler():
         self.response_data = response.json()
         
         print(self.response_data['message'])
+        
+        self.auto_ddos_enabled_at = datetime.fromisoformat(self.response_data['auto_ddos_enabled_at'].replace("Z", "+00:00")) if self.response_data['auto_ddos_enabled_at'] else None
+        self.auto_ddos_timeout = self.response_data['auto_ddos_timeout'] if self.response_data['auto_ddos_timeout'] else None
+        self.now_utc = datetime.now(timezone.utc)
+        
+        # Check ddos mode evey time load stats are submitted and disable if expired
+        if self.auto_ddos_enabled_at and self.auto_ddos_timeout and self.auto_ddos_enabled_at + timedelta(minutes=self.auto_ddos_timeout) < self.now_utc:
+            auto_ddos_payload = {
+                'datatype': 'auto_ddos_mode',
+                'instance_id': self.instance_id,
+                'auto_ddos_mode': False,
+                }
+            
+            response = requests.post(self.api_url, json=auto_ddos_payload)
+            # Do not overwrite load_stats response data
+            response_data = response.json()
+            
+            print(response_data['message'])
     
     def submit_log_data(self):
         """ Parse logs and submit data using API """
@@ -328,13 +338,13 @@ class ApiHandler():
             'datatype': 'log_data',
             'instance_id': self.instance_id,
             'filtered_logs': parser.filtered_logs,
-            'requests_by_domain': parser.requests_by_domain,
+            'requests_by_domain': parser.requests_by_domain
         }
         
         response = requests.post(self.api_url, json=scan_payload)
         log_data_response = response.json()
         
-        print(log_data_response['message'])
+        print(log_data_response['message'])    
         
     def process_blocks(self):
         self.blocked_ips = self.response_data.get('blocked_ips', [])
