@@ -212,30 +212,33 @@ class Block:
             current_mode = "default 1;" in self.ddos_existing_lines
 
             # Only update file if state changed
-            if current_mode != self.ddos_mode:
-
+            if current_mode != self.ddos_mode or len(self.ddos_existing_lines) > 1:
                 with open(self.ddos_filename, "w") as f:
-                    f.write(f"default 0;\n")
+                    f.write(f"default {int(self.ddos_mode)};\n")
                 
                 print("Applied DDoS mode for all websites.")
                 self.restart_required = 1
         else:
-            if "default 0;" not in self.ddos_existing_lines:
+            if (
+                "default 0;" not in self.ddos_existing_lines
+                or any(existing_domain not in self.ddos_mode_hosts for existing_domain in self.ddos_existing_lines)
+                or any(actual_domain not in self.ddos_existing_lines for actual_domain in self.ddos_mode_hosts)
+                ):
+                                
                 with open(self.ddos_filename, "w") as f:
                     f.write(f"default 0;\n")
-                self.restart_required = 1
                      
-            for domain in self.ddos_mode_hosts:
-                if f"{domain} 1;" not in self.ddos_existing_lines:
-                    with open(self.ddos_filename, "a") as f:
-                        f.write(f"{domain} 1;\n")
-                    self.restart_required = 1
-                if f"www.{domain} 1;" not in self.ddos_existing_lines:
-                    with open(self.ddos_filename, "a") as f:
-                        f.write(f"www.{domain} 1;\n")
-                    self.restart_required = 1
-                    print(f"Applied DDoS mode for {domain}.")         
-            
+                for domain in self.ddos_mode_hosts:
+                    if f"{domain} 1;" not in self.ddos_existing_lines:
+                        with open(self.ddos_filename, "a") as f:
+                            f.write(f"{domain} 1;\n")
+                        self.restart_required = 1
+                    if f"www.{domain} 1;" not in self.ddos_existing_lines:
+                        with open(self.ddos_filename, "a") as f:
+                            f.write(f"www.{domain} 1;\n")
+                        self.restart_required = 1
+                        print(f"Applied DDoS mode for {domain}.")         
+                
             
             
     def restart_nginx(self):
