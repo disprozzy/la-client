@@ -219,9 +219,13 @@ class Block:
                 print("Applied DDoS mode for all websites.")
                 self.restart_required = 1
         else:
+            # We need to update nginx config if:
+            # 1. default is 1
+            # 2. config file has ddos mode enabled for a domain which should not blocked
+            # 3. config file does not have ddos mode enabled for a domain which shoul be blocked
             if (
                 "default 0;" not in self.ddos_existing_lines
-                or any(existing_domain not in self.ddos_mode_hosts for existing_domain in self.ddos_existing_lines)
+                or any(existing_domain not in self.ddos_mode_hosts for existing_domain in self.ddos_existing_lines if not existing_domain.startswith("www."))
                 or any(actual_domain not in self.ddos_existing_lines for actual_domain in self.ddos_mode_hosts)
                 ):
                                 
@@ -237,7 +241,7 @@ class Block:
                         with open(self.ddos_filename, "a") as f:
                             f.write(f"www.{domain} 1;\n")
                         self.restart_required = 1
-                        print(f"Applied DDoS mode for {domain}.")         
+                print(f"Applied DDoS mode for {domain}.")         
                 
             
             
