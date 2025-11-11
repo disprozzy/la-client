@@ -233,15 +233,10 @@ class Block:
                     f.write(f"default 0;\n")
                      
                 for domain in self.ddos_mode_hosts:
-                    if not any(f"{domain} 1;" in line for line in self.ddos_existing_lines):
                         with open(self.ddos_filename, "a") as f:
                             f.write(f"{domain} 1;\n")
-                        print(f"Applied DDoS mode for {domain}.") 
-                        self.restart_required = 1
-                    if not any(f"www.{domain} 1;" in line for line in self.ddos_existing_lines):
-                        with open(self.ddos_filename, "a") as f:
                             f.write(f"www.{domain} 1;\n")
-                        print(f"Applied DDoS mode for www.{domain}.") 
+                        print(f"Applied DDoS mode for {domain}.") 
                         self.restart_required = 1
                             
                 
