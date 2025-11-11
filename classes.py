@@ -225,8 +225,8 @@ class Block:
             # 3. config file does not have ddos mode enabled for a domain which shoul be blocked
             if (
                 "default 0;" not in self.ddos_existing_lines
-                or any(existing_domain not in self.ddos_mode_hosts for existing_domain in self.ddos_existing_lines if not existing_domain.startswith("www."))
-                or any(actual_domain not in self.ddos_existing_lines for actual_domain in self.ddos_mode_hosts)
+                or any(f"{existing_domain[0]}" not in self.ddos_mode_hosts for existing_domain in self.ddos_existing_lines if not existing_domain.startswith("www."))
+                or any(f"{actual_domain} 1" not in self.ddos_existing_lines for actual_domain in self.ddos_mode_hosts)
                 ):
                                 
                 with open(self.ddos_filename, "w") as f:
