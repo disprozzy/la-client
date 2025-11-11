@@ -225,8 +225,8 @@ class Block:
             # 3. config file does not have ddos mode enabled for a domain which shoul be blocked
             if (
                 "default 0;" not in self.ddos_existing_lines
-                or any(f"{existing_domain[0]}" not in self.ddos_mode_hosts for existing_domain in self.ddos_existing_lines if not existing_domain.startswith("www."))
-                or any(f"{actual_domain} 1" not in self.ddos_existing_lines for actual_domain in self.ddos_mode_hosts)
+                or any(existing_domain.split(' ')[0] not in self.ddos_mode_hosts for existing_domain in self.ddos_existing_lines if not existing_domain.startswith(("www", "default")))
+                or any(f"{actual_domain} 1;" not in self.ddos_existing_lines for actual_domain in self.ddos_mode_hosts)
                 ):
                                 
                 with open(self.ddos_filename, "w") as f:
@@ -236,12 +236,14 @@ class Block:
                     if f"{domain} 1;" not in self.ddos_existing_lines:
                         with open(self.ddos_filename, "a") as f:
                             f.write(f"{domain} 1;\n")
+                        print(f"Applied DDoS mode for {domain}.") 
                         self.restart_required = 1
                     if f"www.{domain} 1;" not in self.ddos_existing_lines:
                         with open(self.ddos_filename, "a") as f:
                             f.write(f"www.{domain} 1;\n")
+                        print(f"Applied DDoS mode for www.{domain}.") 
                         self.restart_required = 1
-                print(f"Applied DDoS mode for {domain}.")         
+                            
                 
             
             
