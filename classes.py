@@ -37,6 +37,9 @@ class LogParser:
         elif self.panel == 'cpanel':
             self.log_string = '*ssl_log'
             self.full_path = f"/var/log/nginx/domains/{self.domain}{self.log_string}"
+        elif self.panel == 'custom_nginx':
+            self.log_string = "*_access.log"
+            self.full_path = f"/var/log/nginx/{self.domain}{self.log_string}"
         else:
             print("Could not detect log path.")
             sys.exit()
@@ -70,6 +73,8 @@ class LogParser:
                     domain_name = log_file.split('/system/')[1].split('/')[0]
                 elif self.panel == 'cpanel':
                     domain_name = log_file.split('/domains/')[1].split('-')[0]
+                elif self.panel == 'custom_nginx':
+                    domain_name = log_file.split('/ngxinx/')[1].split('_')[0]
             except:
                 domain_name = "not found"
 
@@ -422,4 +427,6 @@ def detect_panel():
         return "plesk"
     elif os.path.isfile("/usr/local/cpanel/version"):
         return "cpanel"
+    elif os.path.isdir("/etc/nginx/sites-enabled/"):
+        return "custom_nginx"
     return None
