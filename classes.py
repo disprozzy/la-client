@@ -289,7 +289,13 @@ class ApiHandler():
         """ Auto ddos mode
             Enable if too many ips are submitting request to checkout
             """
-        auto_ddos_enabled_at = datetime.fromisoformat(self.response_data['auto_ddos_enabled_at'].replace("Z", "+00:00")) if self.response_data['auto_ddos_enabled_at'] else None
+        date_str = self.response_data['auto_ddos_enabled_at']
+        if date_str:
+            # Handles "2023-10-27T10:00:00Z"
+            clean_str = date_str.replace("Z", "")
+            auto_ddos_enabled_at = datetime.strptime(clean_str, "%Y-%m-%dT%H:%M:%S.%f")
+        else:
+            auto_ddos_enabled_at = None
         checkout_requests = self.response_data['checkout_requests']
         
         if not auto_ddos_enabled_at:
