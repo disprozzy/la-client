@@ -23,7 +23,8 @@ class LogParser:
         self.start_time = self.end_time - timedelta(minutes=self.minutes)
         self.checkout_patterns = [
             'POST /?wc-ajax=checkout',
-            'GET /random'
+            'GET /random',
+            'POST /payment/payment_cc.php'
         ]
 
         # set log string to check, all logs by default - nginx and apache
