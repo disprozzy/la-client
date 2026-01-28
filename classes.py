@@ -4,6 +4,7 @@ from dotenv import load_dotenv
 import os, sys
 import requests
 import subprocess
+import json
 
 class LogParser:
     def __init__(self, 
@@ -99,6 +100,9 @@ class LogParser:
                     self.requests_by_domain[domain_name]['uniq_ips'].add(line.split()[0])
 
         # convert the list of uniq IPs to count
+        self.ips_by_domain = json.loads(
+            json.dumps(self.requests_by_domain, default=list)
+        )
         for domain_name in self.requests_by_domain:
             self.requests_by_domain[domain_name]['uniq_ips'] = len(self.requests_by_domain[domain_name]['uniq_ips'])
         
@@ -376,7 +380,8 @@ class ApiHandler():
             'datatype': 'log_data',
             'instance_id': self.instance_id,
             'filtered_logs': parser.filtered_logs,
-            'requests_by_domain': parser.requests_by_domain
+            'requests_by_domain': parser.requests_by_domain,
+            'ips_by_domain': parser.ips_by_domain
         }
         
         response = requests.post(self.api_url, json=scan_payload)
