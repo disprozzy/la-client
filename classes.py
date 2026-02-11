@@ -26,6 +26,7 @@ class LogParser:
             'POST /?wc-ajax=checkout',
             'GET /random',
             'POST /payment/payment_cc.php'
+            'POST /cart.php HTTP/2.0" 200'
         ]
 
         # set log string to check, all logs by default - nginx and apache
@@ -341,10 +342,15 @@ class ApiHandler():
             'ip': self.server_ip,
         }
         
-        response = requests.post(self.api_url, json=payload)
-        self.response_data = response.json()
-        
-        print(self.response_data['message'])
+        try:
+            response = requests.post(self.api_url, json=payload)
+            self.response_data = response.json()
+            print(self.response_data['message'])
+        except:
+            print(f"Cant access {self.api_url}. Disabling the blocks.")
+            self.response_data = {}
+            self.response_data['blocked_ips'] = []
+            self.response_data['ddos_mode'] = False
         
         ts = self.response_data.get('auto_ddos_enabled_at')
         if ts:
@@ -354,7 +360,7 @@ class ApiHandler():
             self.auto_ddos_enabled_at = datetime.strptime(ts, "%Y-%m-%dT%H:%M:%S.%f%z")
         else:
             self.auto_ddos_enabled_at = None
-        self.auto_ddos_timeout = self.response_data['auto_ddos_timeout'] if self.response_data['auto_ddos_timeout'] else None
+        self.auto_ddos_timeout = self.response_data['auto_ddos_timeout'] if self.response_data.get('auto_ddos_timeout') else None
         self.now_utc = datetime.now(timezone.utc)
         
         # Check ddos mode evey time load stats are submitted and disable if expired
@@ -393,8 +399,8 @@ class ApiHandler():
         self.blocked_ips = self.response_data.get('blocked_ips', [])
         self.whitelisted_ips = self.response_data.get('whitelisted_ips', []) + [self.server_ip]
         self.ddos_mode = self.response_data['ddos_mode']
-        self.ddos_mode_hosts = self.response_data['ddos_mode_hosts']
-        self.disable_all_blocks = self.response_data['disable_all_blocks']
+        self.ddos_mode_hosts = self.response_data.get('ddos_mode_hosts')
+        self.disable_all_blocks = self.response_data.get('disable_all_blocks')
         block = Block(self)
         block.process()
         block.set_ddos_mode()
