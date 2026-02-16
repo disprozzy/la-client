@@ -136,6 +136,7 @@ class LogParser:
                 
                         
 class Block:
+    BOT_USER_AGENTS_MAP = '/etc/nginx/maps/bot_user_agents.map'
     WHITELISTED_URLS_MAP = '/etc/nginx/maps/whitelisted_urls.map'
     DDOSNULL_CONF = '/etc/nginx/conf.d/ddosnull.conf'
     EXPECTED_DDOSNULL_CONF = """# ---- Whitelist ----
@@ -215,23 +216,32 @@ default         0;
         self.whitelisted_ips_lines = load_file_data(self.whitelisted_ips_filename)
 
         self.whitelisted_urls_lines = load_file_data(self.WHITELISTED_URLS_MAP)
+        self.bot_user_agents_lines = load_file_data(self.BOT_USER_AGENTS_MAP)
 
         self.blocked_ips = api_handler.blocked_ips
         self.whitelisted_ips = api_handler.whitelisted_ips
         self.whitelisted_urls = api_handler.whitelisted_urls
+        self.whitelisted_user_agents = api_handler.whitelisted_user_agents
         self.ddos_mode = api_handler.ddos_mode
         self.ddos_mode_hosts = api_handler.ddos_mode_hosts
         self.disable_all_blocks = api_handler.disable_all_blocks
         
     def verify_nginx_config(self):
-        # 1. Ensure whitelisted_urls.map exists
+        # 1. Ensure bot_user_agents.map exists
+        if not os.path.exists(self.BOT_USER_AGENTS_MAP):
+            with open(self.BOT_USER_AGENTS_MAP, 'w') as f:
+                f.write("default 0;\n")
+            print(f"Created {self.BOT_USER_AGENTS_MAP}")
+            self.restart_required = 1
+
+        # 2. Ensure whitelisted_urls.map exists
         if not os.path.exists(self.WHITELISTED_URLS_MAP):
             with open(self.WHITELISTED_URLS_MAP, 'w') as f:
                 f.write("default 0;\n")
             print(f"Created {self.WHITELISTED_URLS_MAP}")
             self.restart_required = 1
 
-        # 2. Ensure ddosnull.conf matches expected content
+        # 3. Ensure ddosnull.conf matches expected content
         current_content = ""
         if os.path.exists(self.DDOSNULL_CONF):
             with open(self.DDOSNULL_CONF, 'r') as f:
@@ -318,6 +328,30 @@ default         0;
                     f.write(url_line + "\n")
                 else:
                     print(f"{url_line} should not be whitelisted. Removing.")
+                    self.restart_required = 1
+
+    def process_whitelisted_uas(self):
+        # Add new user agents from API
+        for ua in self.whitelisted_user_agents:
+            ua_line = f"~*{ua} 1;"
+            if ua_line not in self.bot_user_agents_lines:
+                with open(self.BOT_USER_AGENTS_MAP, 'a') as f:
+                    f.write(ua_line + "\n")
+                    self.bot_user_agents_lines.append(ua_line)
+                self.restart_required = 1
+
+        # Rebuild file: remove UAs no longer in API response
+        expected_lines = [f"~*{ua} 1;" for ua in self.whitelisted_user_agents]
+        with open(self.BOT_USER_AGENTS_MAP, 'w') as f:
+            default_line = "default 0;"
+            if default_line in self.bot_user_agents_lines:
+                self.bot_user_agents_lines.remove(default_line)
+            f.write(f"{default_line}\n")
+            for ua_line in self.bot_user_agents_lines:
+                if ua_line in expected_lines:
+                    f.write(ua_line + "\n")
+                else:
+                    print(f"{ua_line} should not be in bot user agents. Removing.")
                     self.restart_required = 1
 
     def set_ddos_mode(self):
@@ -503,12 +537,14 @@ class ApiHandler():
         self.blocked_ips = self.response_data.get('blocked_ips', [])
         self.whitelisted_ips = self.response_data.get('whitelisted_ips', []) + [self.server_ip]
         self.whitelisted_urls = self.response_data.get('whitelisted_urls', []) + self.response_data.get('whitelisted_urls_global', [])
+        self.whitelisted_user_agents = self.response_data.get('whitelisted_user_agents', []) + self.response_data.get('whitelisted_user_agents_global', [])
         self.ddos_mode = self.response_data['ddos_mode']
         self.ddos_mode_hosts = self.response_data.get('ddos_mode_hosts')
         self.disable_all_blocks = self.response_data.get('disable_all_blocks')
         block = Block(self)
         block.process()
         block.process_whitelisted_urls()
+        block.process_whitelisted_uas()
         block.set_ddos_mode()
         block.restart_nginx()                            
         
