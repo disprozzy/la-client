@@ -136,6 +136,62 @@ class LogParser:
                 
                         
 class Block:
+    WHITELISTED_URLS_MAP = '/etc/nginx/maps/whitelisted_urls.map'
+    DDOSNULL_CONF = '/etc/nginx/conf.d/ddosnull.conf'
+    EXPECTED_DDOSNULL_CONF = """# ---- Whitelist ----
+geo $remote_addr $is_whitelisted_ip {
+include /etc/nginx/maps/whitelisted_ips.map;
+}
+# ---- Bot detection ----
+map $http_user_agent $is_bot {
+include /etc/nginx/maps/bot_user_agents.map;
+}
+
+# ---- Cookie check ----
+map $http_cookie $has_recaptcha_cookie {
+default 0;
+"~recaptcha_verified=1" 1;
+}
+
+# ---- Suspicious IPs ----
+geo $remote_addr $is_suspicious_ip {
+include /etc/nginx/maps/suspicious_ip.map;
+}
+
+# ---- Include domain-based DDoS mode ----
+map $host $ddos_mode {
+include /etc/nginx/maps/ddos_mode.map;
+}
+
+# ---- Whitelisted URLs (skip recaptcha) ----
+map $request_uri $is_whitelisted_url {
+include /etc/nginx/maps/whitelisted_urls.map;
+}
+
+map "$is_bot:$has_recaptcha_cookie:$ddos_mode:$is_suspicious_ip:$is_whitelisted_ip:$is_whitelisted_url" $needs_recaptcha {
+default         0;
+
+# Skip for bots
+"~^1:.*"        0;
+
+# Skip if IP is whitelisted
+"~^.*:.*:.*:.*:1:." 0;
+
+# Skip if URL is whitelisted
+"~^.*:.*:.*:.*:.:1" 0;
+
+# Skip if cookie present
+"~^.:1:.:.:.:."   0;
+
+# Force check: DDoS ON or suspicious IP and no cookie
+"~^0:0:1:.:0:0"   1;
+"~^0:0:.:1:0:0"   1;
+
+# All others: allow
+"~^0:0:0:0:0:0"   0;
+}
+"""
+
     def __init__(self, api_handler):
         self.filename = '/etc/nginx/conf.d/la.conf'
         self.ips_filename = '/etc/nginx/maps/suspicious_ip.map'
@@ -144,6 +200,7 @@ class Block:
         self.write_mode = 'a' if os.path.exists(self.filename) else 'w'
         self.server_ip = api_handler.server_ip
         self.restart_required = 0
+        self.verify_nginx_config()
 
         if os.path.exists(self.filename):
             with open(self.filename, 'r') as f:
@@ -157,12 +214,35 @@ class Block:
         self.ips_existing_lines = load_file_data(self.ips_filename)
         self.whitelisted_ips_lines = load_file_data(self.whitelisted_ips_filename)
 
+        self.whitelisted_urls_lines = load_file_data(self.WHITELISTED_URLS_MAP)
+
         self.blocked_ips = api_handler.blocked_ips
         self.whitelisted_ips = api_handler.whitelisted_ips
+        self.whitelisted_urls = api_handler.whitelisted_urls
         self.ddos_mode = api_handler.ddos_mode
         self.ddos_mode_hosts = api_handler.ddos_mode_hosts
         self.disable_all_blocks = api_handler.disable_all_blocks
         
+    def verify_nginx_config(self):
+        # 1. Ensure whitelisted_urls.map exists
+        if not os.path.exists(self.WHITELISTED_URLS_MAP):
+            with open(self.WHITELISTED_URLS_MAP, 'w') as f:
+                f.write("default 0;\n")
+            print(f"Created {self.WHITELISTED_URLS_MAP}")
+            self.restart_required = 1
+
+        # 2. Ensure ddosnull.conf matches expected content
+        current_content = ""
+        if os.path.exists(self.DDOSNULL_CONF):
+            with open(self.DDOSNULL_CONF, 'r') as f:
+                current_content = f.read()
+
+        if current_content != self.EXPECTED_DDOSNULL_CONF:
+            with open(self.DDOSNULL_CONF, 'w') as f:
+                f.write(self.EXPECTED_DDOSNULL_CONF)
+            print(f"Updated {self.DDOSNULL_CONF}")
+            self.restart_required = 1
+
     def process(self):
         """ 403 rules """
         """
@@ -214,8 +294,32 @@ class Block:
                     f.write(ip_line + "\n")
                 else:
                     print(f"{ip_line.split()[0]} should not be whitelisted. Removing.")
-                    self.restart_required = 1            
-            
+                    self.restart_required = 1
+
+    def process_whitelisted_urls(self):
+        # Add new URLs from API
+        for url in self.whitelisted_urls:
+            url_line = f"~*\\{url} 1;"
+            if url_line not in self.whitelisted_urls_lines:
+                with open(self.WHITELISTED_URLS_MAP, 'a') as f:
+                    f.write(url_line + "\n")
+                    self.whitelisted_urls_lines.append(url_line)
+                self.restart_required = 1
+
+        # Rebuild file: remove URLs no longer in API response
+        expected_lines = [f"~*\\{url} 1;" for url in self.whitelisted_urls]
+        with open(self.WHITELISTED_URLS_MAP, 'w') as f:
+            default_line = "default 0;"
+            if default_line in self.whitelisted_urls_lines:
+                self.whitelisted_urls_lines.remove(default_line)
+            f.write(f"{default_line}\n")
+            for url_line in self.whitelisted_urls_lines:
+                if url_line in expected_lines:
+                    f.write(url_line + "\n")
+                else:
+                    print(f"{url_line} should not be whitelisted. Removing.")
+                    self.restart_required = 1
+
     def set_ddos_mode(self):
         # No hosts mode
         if not self.ddos_mode_hosts:
@@ -398,11 +502,13 @@ class ApiHandler():
     def process_blocks(self):
         self.blocked_ips = self.response_data.get('blocked_ips', [])
         self.whitelisted_ips = self.response_data.get('whitelisted_ips', []) + [self.server_ip]
+        self.whitelisted_urls = self.response_data.get('whitelisted_urls', []) + self.response_data.get('whitelisted_urls_global', [])
         self.ddos_mode = self.response_data['ddos_mode']
         self.ddos_mode_hosts = self.response_data.get('ddos_mode_hosts')
         self.disable_all_blocks = self.response_data.get('disable_all_blocks')
         block = Block(self)
         block.process()
+        block.process_whitelisted_urls()
         block.set_ddos_mode()
         block.restart_nginx()                            
         
