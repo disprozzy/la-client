@@ -7,12 +7,13 @@ import subprocess
 import json
 
 class LogParser:
-    def __init__(self, 
-                 minutes = "30", 
-                 path = "", 
-                 domain = "*", 
-                 log_type = "*access_ssl_log", 
-                 code = ""):
+    def __init__(self,
+                 minutes = "30",
+                 path = "",
+                 domain = "*",
+                 log_type = "*access_ssl_log",
+                 code = "",
+                 checkout_patterns = None):
         self.panel = detect_panel()
         self.path = path
         self.domain = domain
@@ -22,12 +23,7 @@ class LogParser:
         # set time range
         self.end_time = datetime.now()
         self.start_time = self.end_time - timedelta(minutes=self.minutes)
-        self.checkout_patterns = [
-            'POST /?wc-ajax=checkout',
-            'GET /random',
-            'POST /payment/payment_cc.php'
-            'POST /cart.php HTTP/2.0" 200'
-        ]
+        self.checkout_patterns = checkout_patterns or []
 
         # set log string to check, all logs by default - nginx and apache
         if self.panel == 'plesk':
@@ -411,24 +407,25 @@ class ApiHandler():
     
     def check_checkout_requests(self):
         ddos_mode = self.response_data['ddos_mode']
+        checkout_endpoints = self.response_data.get('checkout_endpoints', [])
         if not ddos_mode:
-            parser = LogParser(minutes=60)
+            parser = LogParser(minutes=60, checkout_patterns=checkout_endpoints)
             parser.parse_logs()
             parser.process_checkout_ips()
             self.suspicious_checkout_ips = parser.suspicious_checkout_ips
-            
+
             if self.suspicious_checkout_ips:
                 payload = {
                     'datatype': 'suspicious_checkout_ips',
                     'instance_id': self.instance_id,
                     'suspicious_checkout_ips': self.suspicious_checkout_ips,
                 }
-                
+
                 response = requests.post(self.api_url, json=payload)
                 self.susp_response_data = response.json()
-                
+
                 print(self.susp_response_data['message'])
-        
+
         """ Auto ddos mode
             Enable if too many ips are submitting request to checkout
             """
@@ -440,9 +437,9 @@ class ApiHandler():
         else:
             auto_ddos_enabled_at = None
         checkout_requests = self.response_data['checkout_requests']
-        
+
         if not auto_ddos_enabled_at:
-            parser = LogParser(minutes=10)
+            parser = LogParser(minutes=10, checkout_patterns=checkout_endpoints)
             parser.parse_logs()
             parser.process_checkout_ips()
             
