@@ -496,10 +496,11 @@ class ApiHandler():
         else:
             self.auto_ddos_enabled_at = None
         self.auto_ddos_timeout = self.response_data['auto_ddos_timeout'] if self.response_data.get('auto_ddos_timeout') else None
+        self.auto_ddos_current_timeout = self.response_data.get('auto_ddos_current_timeout') or self.auto_ddos_timeout
         self.now_utc = datetime.now(timezone.utc)
-        
+
         # Check ddos mode evey time load stats are submitted and disable if expired
-        if self.auto_ddos_enabled_at and self.auto_ddos_timeout and self.auto_ddos_enabled_at + timedelta(minutes=self.auto_ddos_timeout) < self.now_utc:
+        if self.auto_ddos_enabled_at and self.auto_ddos_current_timeout and self.auto_ddos_enabled_at + timedelta(minutes=self.auto_ddos_current_timeout) < self.now_utc:
             auto_ddos_payload = {
                 'datatype': 'auto_ddos_mode',
                 'instance_id': self.instance_id,
