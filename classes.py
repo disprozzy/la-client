@@ -73,7 +73,7 @@ class LogParser:
                 elif self.panel == 'cpanel':
                     domain_name = log_file.split('/domains/')[1].split('-')[0]
                 elif self.panel == 'custom_nginx':
-                    domain_name = log_file.split('/ngxinx/')[1].split('_')[0]
+                    domain_name = log_file.split('/nginx/')[1].split('_')[0]
             except:
                 domain_name = "not found"
 
@@ -91,7 +91,7 @@ class LogParser:
                 except:
                     response_code = 200
                 if (log_time and self.start_time <= log_time <= self.end_time and
-                        (self.code == '' or self.code == response_code)):
+                        (self.code == '' or self.code == response_code)) and (' /recaptcha/'not in line):
                     self.filtered_logs.append(line)
                     self.requests_by_domain[domain_name]['count'] += 1
                     self.requests_by_domain[domain_name]['uniq_ips'].add(line.split()[0])
