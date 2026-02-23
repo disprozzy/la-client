@@ -82,16 +82,24 @@ class LogParser:
             # Load log file
             with open(log_file, 'r') as f:
                 log_lines = f.readlines()
+            
+            # 302 can be a redirect to /recaptcha/
+            # 403 can be a hard block    
+            ignored_codes = [302, 403]
 
             # Filter log lines in time range
             for line in log_lines:
                 log_time = self.get_log_time(line)
                 try:
-                    response_code = line.split('"')[2].strip().split()[0]
+                    response_code = int(line.split('"')[2].strip().split()[0])
                 except:
                     response_code = 200
-                if (log_time and self.start_time <= log_time <= self.end_time and
-                        (self.code == '' or self.code == response_code)) and (' /recaptcha/'not in line):
+                if (
+                        log_time and self.start_time <= log_time <= self.end_time and
+                        (self.code == '' or self.code == response_code) and 
+                        (' /recaptcha/'not in line) and 
+                        response_code not in ignored_codes
+                    ):
                     self.filtered_logs.append(line)
                     self.requests_by_domain[domain_name]['count'] += 1
                     self.requests_by_domain[domain_name]['uniq_ips'].add(line.split()[0])
@@ -134,7 +142,11 @@ class LogParser:
 class Block:
     BOT_USER_AGENTS_MAP = '/etc/nginx/maps/bot_user_agents.map'
     WHITELISTED_URLS_MAP = '/etc/nginx/maps/whitelisted_urls.map'
+    BLOCK_WITH_403_MAP = '/etc/nginx/maps/block_with_403.map'
     DDOSNULL_CONF = '/etc/nginx/conf.d/ddosnull.conf'
+    PLESK_PROXY_PHP = '/usr/local/psa/admin/conf/templates/custom/domain/service/proxy.php'
+    PLESK_VHOST_PHP = '/usr/local/psa/admin/conf/templates/custom/domain/nginxDomainVirtualHost.php'
+    CPANEL_SERVER_INCLUDES = '/etc/nginx/conf.d/server-includes/ddosnull.conf'
     EXPECTED_DDOSNULL_CONF = """# ---- Whitelist ----
 geo $remote_addr $is_whitelisted_ip {
 include /etc/nginx/maps/whitelisted_ips.map;
@@ -163,6 +175,11 @@ include /etc/nginx/maps/ddos_mode.map;
 # ---- Whitelisted URLs (skip recaptcha) ----
 map $request_uri $is_whitelisted_url {
 include /etc/nginx/maps/whitelisted_urls.map;
+}
+
+# ---- 403 Block Networks ----
+geo $remote_addr $block_with_403 {
+include /etc/nginx/maps/block_with_403.map;
 }
 
 map "$is_bot:$has_recaptcha_cookie:$ddos_mode:$is_suspicious_ip:$is_whitelisted_ip:$is_whitelisted_url" $needs_recaptcha {
@@ -213,6 +230,7 @@ default         0;
 
         self.whitelisted_urls_lines = load_file_data(self.WHITELISTED_URLS_MAP)
         self.bot_user_agents_lines = load_file_data(self.BOT_USER_AGENTS_MAP)
+        self.block_with_403_lines = load_file_data(self.BLOCK_WITH_403_MAP)
 
         self.blocked_ips = api_handler.blocked_ips
         self.whitelisted_ips = api_handler.whitelisted_ips
@@ -221,6 +239,7 @@ default         0;
         self.ddos_mode = api_handler.ddos_mode
         self.ddos_mode_hosts = api_handler.ddos_mode_hosts
         self.disable_all_blocks = api_handler.disable_all_blocks
+        self.networks_block_with_403 = api_handler.networks_block_with_403
         
     def verify_nginx_config(self):
         # 1. Ensure bot_user_agents.map exists
@@ -237,7 +256,14 @@ default         0;
             print(f"Created {self.WHITELISTED_URLS_MAP}")
             self.restart_required = 1
 
-        # 3. Ensure ddosnull.conf matches expected content
+        # 3. Ensure block_with_403.map exists
+        if not os.path.exists(self.BLOCK_WITH_403_MAP):
+            with open(self.BLOCK_WITH_403_MAP, 'w') as f:
+                f.write("default 0;\n")
+            print(f"Created {self.BLOCK_WITH_403_MAP}")
+            self.restart_required = 1
+
+        # 4. Ensure ddosnull.conf matches expected content
         current_content = ""
         if os.path.exists(self.DDOSNULL_CONF):
             with open(self.DDOSNULL_CONF, 'r') as f:
@@ -248,6 +274,107 @@ default         0;
                 f.write(self.EXPECTED_DDOSNULL_CONF)
             print(f"Updated {self.DDOSNULL_CONF}")
             self.restart_required = 1
+
+        # 5. Check panel-specific server block configs for block_with_403 directives
+        panel = detect_panel()
+        if panel == 'plesk':
+            needs_plesk_regen = False
+
+            # proxy.php: only the if-block (content is inside location /, named locations not allowed here)
+            if os.path.exists(self.PLESK_PROXY_PHP):
+                with open(self.PLESK_PROXY_PHP, 'r') as f:
+                    proxy_content = f.read()
+                if 'block_with_403' not in proxy_content:
+                    if_snippet = (
+                        "        if ($block_with_403 = 1) {\n"
+                        "                return 418;\n"
+                        "        }\n"
+                    )
+                    if 'needs_recaptcha' in proxy_content:
+                        new_content = proxy_content.replace(
+                            'if ($needs_recaptcha = 1)',
+                            if_snippet + 'if ($needs_recaptcha = 1)',
+                            1
+                        )
+                    else:
+                        new_content = if_snippet + proxy_content
+                    with open(self.PLESK_PROXY_PHP, 'w') as f:
+                        f.write(new_content)
+                    print(f"Updated {self.PLESK_PROXY_PHP} with block_with_403 if-block")
+                    needs_plesk_regen = True
+
+            # nginxDomainVirtualHost.php: error_page + named location (server block level)
+            if os.path.exists(self.PLESK_VHOST_PHP):
+                with open(self.PLESK_VHOST_PHP, 'r') as f:
+                    vhost_content = f.read()
+                if 'ddosnull_block_403' not in vhost_content:
+                    location_snippet = (
+                        "        error_page 418 =403 @ddosnull_block_403;\n"
+                        "        location @ddosnull_block_403 {\n"
+                        "                internal;\n"
+                        "                rewrite ^ /403 break;\n"
+                    "                proxy_pass https://app.ddosnull.com:4433;\n"
+                        "                proxy_ssl_server_name on;\n"
+                        "                proxy_ssl_name app.ddosnull.com;\n"
+                        "                proxy_set_header Host app.ddosnull.com;\n"
+                        "                proxy_set_header X-Real-IP $remote_addr;\n"
+                        "                proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;\n"
+                        "        }\n\n"
+                    )
+                    if '#block bots' in vhost_content:
+                        new_vhost_content = vhost_content.replace(
+                            '#block bots',
+                            location_snippet + '#block bots',
+                            1
+                        )
+                    else:
+                        new_vhost_content = location_snippet + vhost_content
+                    with open(self.PLESK_VHOST_PHP, 'w') as f:
+                        f.write(new_vhost_content)
+                    print(f"Updated {self.PLESK_VHOST_PHP} with block_with_403 location")
+                    needs_plesk_regen = True
+
+            if needs_plesk_regen:
+                run(['plesk', 'sbin', 'httpdmng', '--reconfigure-all'], check=False)
+                self.restart_required = 1
+
+        elif panel == 'cpanel' and os.path.exists(self.CPANEL_SERVER_INCLUDES):
+            with open(self.CPANEL_SERVER_INCLUDES, 'r') as f:
+                includes_content = f.read()
+            if 'block_with_403' not in includes_content:
+                cpanel_server_includes = (
+                    "    location /recaptcha/ {\n"
+                    "            proxy_pass https://app.ddosnull.com:4433;\n"
+                    "                    proxy_set_header X-Forwarded-Proto $scheme;\n"
+                    "                    proxy_ssl_server_name on;\n"
+                    "                    proxy_ssl_name app.ddosnull.com;\n"
+                    "                    proxy_set_header Host app.ddosnull.com;\n"
+                    "            proxy_set_header X-Real-IP $remote_addr;\n"
+                    "            proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;\n"
+                    "        }\n\n"
+                    "        error_page 418 =403 @ddosnull_block_403;\n"
+                    "        location @ddosnull_block_403 {\n"
+                    "                internal;\n"
+                    "                rewrite ^ /403 break;\n"
+                    "                proxy_pass https://app.ddosnull.com:4433;\n"
+                    "                proxy_ssl_server_name on;\n"
+                    "                proxy_ssl_name app.ddosnull.com;\n"
+                    "                proxy_set_header Host app.ddosnull.com;\n"
+                    "                proxy_set_header X-Real-IP $remote_addr;\n"
+                    "                proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;\n"
+                    "        }\n\n"
+                    "        if ($block_with_403 = 1) {\n"
+                    "                return 418;\n"
+                    "        }\n\n"
+                    "        if ($needs_recaptcha = 1) {\n"
+                    "                return 302 /recaptcha/?next=$request_uri;\n"
+                    "        }"
+                )
+                with open(self.CPANEL_SERVER_INCLUDES, 'w') as f:
+                    f.write(cpanel_server_includes)
+                print(f"Updated {self.CPANEL_SERVER_INCLUDES} with block_with_403 directives")
+                run(['/usr/local/cpanel/scripts/ea-nginx', 'config', '--all'], check=False)
+                self.restart_required = 1
 
     def process(self):
         """ 403 rules """
@@ -387,6 +514,29 @@ default         0;
                 
             
             
+    def process_block_with_403(self):
+        # Add new networks not yet in the map file
+        for network in self.networks_block_with_403:
+            net_line = f"{network} 1;"
+            if net_line not in self.block_with_403_lines:
+                with open(self.BLOCK_WITH_403_MAP, 'a') as f:
+                    f.write(net_line + "\n")
+                    self.block_with_403_lines.append(net_line)
+                self.restart_required = 1
+
+        # Rebuild file, removing entries no longer in the 403 block list
+        with open(self.BLOCK_WITH_403_MAP, 'w') as f:
+            default_line = "default 0;"
+            if default_line in self.block_with_403_lines:
+                self.block_with_403_lines.remove(default_line)
+            f.write(f"{default_line}\n")
+            for net_line in self.block_with_403_lines:
+                if net_line.split()[0] in self.networks_block_with_403:
+                    f.write(net_line + "\n")
+                else:
+                    print(f"{net_line.split()[0]} no longer in block_with_403. Removing.")
+                    self.restart_required = 1
+
     def restart_nginx(self):
         nginx_msg = ''
         if self.restart_required:
@@ -539,11 +689,13 @@ class ApiHandler():
         self.ddos_mode = self.response_data['ddos_mode']
         self.ddos_mode_hosts = self.response_data.get('ddos_mode_hosts')
         self.disable_all_blocks = self.response_data.get('disable_all_blocks')
+        self.networks_block_with_403 = self.response_data.get('block_with_403', [])
         block = Block(self)
         block.process()
         block.process_whitelisted_urls()
         block.process_whitelisted_uas()
         block.set_ddos_mode()
+        block.process_block_with_403()
         block.restart_nginx()                            
         
 def get_server_external_ip():
