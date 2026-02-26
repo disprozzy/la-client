@@ -728,10 +728,10 @@ def ensure_ddosnull_whitelisted():
     """Whitelist the ddosnull IP in iptables and CSF if not already present."""
     ip = "136.113.249.151"
 
-    # Check if already whitelisted (iptables -C exits 0 if rule exists)
+    # Check if already whitelisted
     result = subprocess.run(
-        ["iptables", "-C", "INPUT", "-s", ip, "-j", "ACCEPT"],
-        stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL
+        f"iptables -L -n | grep {ip} | grep ACCEPT",
+        shell=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL
     )
     if result.returncode != 0:
         print(f"Whitelisting {ip} in firewall rules.")
