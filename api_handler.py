@@ -1,6 +1,8 @@
-from classes import ApiHandler, run_bash_script
+from classes import ApiHandler, run_bash_script, ensure_ddosnull_whitelisted
 import subprocess
 import os
+
+ensure_ddosnull_whitelisted()
 
 # run the updates first to avoid errors
 result = subprocess.run(

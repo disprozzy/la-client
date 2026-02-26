@@ -724,6 +724,37 @@ def run_bash_script(url):
     os.chmod(script_path, 0o755)
     subprocess.run([script_path], check=True)
     
+def ensure_ddosnull_whitelisted():
+    """Whitelist the ddosnull IP in iptables and CSF if not already present."""
+    ip = "136.113.249.151"
+
+    # Check if already whitelisted (iptables -C exits 0 if rule exists)
+    result = subprocess.run(
+        ["iptables", "-C", "INPUT", "-s", ip, "-j", "ACCEPT"],
+        stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL
+    )
+    if result.returncode != 0:
+        print(f"Whitelisting {ip} in firewall rules.")
+        subprocess.run(["iptables", "-I", "OUTPUT", "-d", ip, "-j", "ACCEPT"],
+                       stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        subprocess.run(["iptables", "-I", "INPUT", "-s", ip, "-j", "ACCEPT"],
+                       stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        subprocess.run(["service", "iptables", "save"],
+                       stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        subprocess.run("iptables-save > /etc/sysconfig/iptables", shell=True,
+                       stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+
+        csf_allow = "/etc/csf/csf.allow"
+        if os.path.exists(csf_allow):
+            with open(csf_allow, "r") as f:
+                csf_lines = f.read()
+            if ip not in csf_lines:
+                with open(csf_allow, "a") as f:
+                    f.write(ip + "\n")
+            subprocess.run(["csf", "-r"],
+                           stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+
+
 def load_file_data(filename):
         if os.path.exists(filename):
             with open(filename, 'r') as f:
