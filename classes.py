@@ -735,14 +735,14 @@ def ensure_ddosnull_whitelisted():
     )
     if result.returncode != 0:
         print(f"Whitelisting {ip} in firewall rules.")
-        subprocess.run(["iptables", "-I", "OUTPUT", "-d", ip, "-j", "ACCEPT"],
-                       stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-        subprocess.run(["iptables", "-I", "INPUT", "-s", ip, "-j", "ACCEPT"],
-                       stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-        subprocess.run(["service", "iptables", "save"],
-                       stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-        subprocess.run("iptables-save > /etc/sysconfig/iptables", shell=True,
-                       stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        subprocess.run(f"iptables -I OUTPUT -d {ip} -j ACCEPT",
+                       shell=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        subprocess.run(f"iptables -I INPUT -s {ip} -j ACCEPT",
+                       shell=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        subprocess.run("service iptables save",
+                       shell=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        subprocess.run("iptables-save > /etc/sysconfig/iptables",
+                       shell=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
 
         csf_allow = "/etc/csf/csf.allow"
         if os.path.exists(csf_allow):
@@ -751,8 +751,8 @@ def ensure_ddosnull_whitelisted():
             if ip not in csf_lines:
                 with open(csf_allow, "a") as f:
                     f.write(ip + "\n")
-            subprocess.run(["csf", "-r"],
-                           stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+            subprocess.run("csf -r",
+                           shell=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
 
 
 def load_file_data(filename):
