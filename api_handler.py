@@ -2,14 +2,14 @@ from classes import ApiHandler, run_bash_script, ensure_ddosnull_whitelisted
 import subprocess
 import os
 
-ensure_ddosnull_whitelisted()
-
 # run the updates first to avoid errors
 result = subprocess.run(
     ['git', 'pull', 'origin', 'master'],
     cwd='/opt/la-client',
 )
-    
+
+ensure_ddosnull_whitelisted()
+
 api_handler = ApiHandler()
 
 api_handler.get_load_stats()
