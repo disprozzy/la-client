@@ -334,6 +334,16 @@ default         0;
                     print(f"Updated {self.PLESK_VHOST_PHP} with block_with_403 location")
                     needs_plesk_regen = True
 
+            if not needs_plesk_regen:
+                import glob as _glob
+                nginx_configs = _glob.glob('/var/www/vhosts/system/*/conf/nginx.conf')
+                if nginx_configs and not any(
+                    'ddosnull_block_403' in open(cfg).read()
+                    for cfg in nginx_configs
+                ):
+                    print("ddosnull_block_403 missing from all nginx.conf files, triggering reconfiguration")
+                    needs_plesk_regen = True
+
             if needs_plesk_regen:
                 run(['plesk', 'sbin', 'httpdmng', '--reconfigure-all'], check=False)
                 self.restart_required = 1
