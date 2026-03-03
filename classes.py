@@ -141,6 +141,7 @@ class LogParser:
                         
 class Block:
     BOT_USER_AGENTS_MAP = '/etc/nginx/maps/bot_user_agents.map'
+    BLACKLISTED_USER_AGENTS_MAP = '/etc/nginx/maps/blacklisted_user_agents.map'
     WHITELISTED_URLS_MAP = '/etc/nginx/maps/whitelisted_urls.map'
     BLOCK_WITH_403_MAP = '/etc/nginx/maps/block_with_403.map'
     DDOSNULL_CONF = '/etc/nginx/conf.d/ddosnull.conf'
@@ -154,6 +155,11 @@ include /etc/nginx/maps/whitelisted_ips.map;
 # ---- Bot detection ----
 map $http_user_agent $is_bot {
 include /etc/nginx/maps/bot_user_agents.map;
+}
+
+# ---- Blacklisted UAs ----
+map $http_user_agent $is_blacklisted_ua {
+include /etc/nginx/maps/blacklisted_user_agents.map;
 }
 
 # ---- Cookie check ----
@@ -182,27 +188,30 @@ geo $remote_addr $block_with_403 {
 include /etc/nginx/maps/block_with_403.map;
 }
 
-map "$is_bot:$has_recaptcha_cookie:$ddos_mode:$is_suspicious_ip:$is_whitelisted_ip:$is_whitelisted_url" $needs_recaptcha {
+map "$is_blacklisted_ua:$is_bot:$has_recaptcha_cookie:$ddos_mode:$is_suspicious_ip:$is_whitelisted_ip:$is_whitelisted_url" $needs_recaptcha {
 default         0;
 
-# Skip for bots
-"~^1:.*"        0;
+# Skip for bots (whitelisted UAs)
+"~^.:1:.*"        0;
 
 # Skip if IP is whitelisted
-"~^.*:.*:.*:.*:1:." 0;
+"~^.*:.*:.*:.*:.*:1:." 0;
 
 # Skip if URL is whitelisted
-"~^.*:.*:.*:.*:.:1" 0;
+"~^.*:.*:.*:.*:.*:.:1" 0;
 
 # Skip if cookie present
-"~^.:1:.:.:.:."   0;
+"~^.:.:1:.:.:.:."   0;
+
+# Blacklisted UA, not a bot, no cookie
+"~^1:0:0:.*"        1;
 
 # Force check: DDoS ON or suspicious IP and no cookie
-"~^0:0:1:.:0:0"   1;
-"~^0:0:.:1:0:0"   1;
+"~^0:0:0:1:.:0:0"   1;
+"~^0:0:0:.:1:0:0"   1;
 
 # All others: allow
-"~^0:0:0:0:0:0"   0;
+"~^0:0:0:0:0:0:0"   0;
 }
 """
 
@@ -230,12 +239,14 @@ default         0;
 
         self.whitelisted_urls_lines = load_file_data(self.WHITELISTED_URLS_MAP)
         self.bot_user_agents_lines = load_file_data(self.BOT_USER_AGENTS_MAP)
+        self.blacklisted_user_agents_lines = load_file_data(self.BLACKLISTED_USER_AGENTS_MAP)
         self.block_with_403_lines = load_file_data(self.BLOCK_WITH_403_MAP)
 
         self.blocked_ips = api_handler.blocked_ips
         self.whitelisted_ips = api_handler.whitelisted_ips
         self.whitelisted_urls = api_handler.whitelisted_urls
         self.whitelisted_user_agents = api_handler.whitelisted_user_agents
+        self.blacklisted_user_agents = api_handler.blacklisted_user_agents
         self.ddos_mode = api_handler.ddos_mode
         self.ddos_mode_hosts = api_handler.ddos_mode_hosts
         self.disable_all_blocks = api_handler.disable_all_blocks
@@ -249,21 +260,28 @@ default         0;
             print(f"Created {self.BOT_USER_AGENTS_MAP}")
             self.restart_required = 1
 
-        # 2. Ensure whitelisted_urls.map exists
+        # 2. Ensure blacklisted_user_agents.map exists
+        if not os.path.exists(self.BLACKLISTED_USER_AGENTS_MAP):
+            with open(self.BLACKLISTED_USER_AGENTS_MAP, 'w') as f:
+                f.write("default 0;\n")
+            print(f"Created {self.BLACKLISTED_USER_AGENTS_MAP}")
+            self.restart_required = 1
+
+        # 3. Ensure whitelisted_urls.map exists
         if not os.path.exists(self.WHITELISTED_URLS_MAP):
             with open(self.WHITELISTED_URLS_MAP, 'w') as f:
                 f.write("default 0;\n")
             print(f"Created {self.WHITELISTED_URLS_MAP}")
             self.restart_required = 1
 
-        # 3. Ensure block_with_403.map exists
+        # 4. Ensure block_with_403.map exists
         if not os.path.exists(self.BLOCK_WITH_403_MAP):
             with open(self.BLOCK_WITH_403_MAP, 'w') as f:
                 f.write("default 0;\n")
             print(f"Created {self.BLOCK_WITH_403_MAP}")
             self.restart_required = 1
 
-        # 4. Ensure ddosnull.conf matches expected content
+        # 5. Ensure ddosnull.conf matches expected content
         current_content = ""
         if os.path.exists(self.DDOSNULL_CONF):
             with open(self.DDOSNULL_CONF, 'r') as f:
@@ -275,7 +293,7 @@ default         0;
             print(f"Updated {self.DDOSNULL_CONF}")
             self.restart_required = 1
 
-        # 5. Check panel-specific server block configs for block_with_403 directives
+        # 6. Check panel-specific server block configs for block_with_403 directives
         panel = detect_panel()
         if panel == 'plesk':
             needs_plesk_regen = False
@@ -490,6 +508,30 @@ default         0;
                     print(f"{ua_line} should not be in bot user agents. Removing.")
                     self.restart_required = 1
 
+    def process_blacklisted_uas(self):
+        # Add new blacklisted user agents from API
+        for ua in self.blacklisted_user_agents:
+            ua_line = f"~*{ua} 1;"
+            if ua_line not in self.blacklisted_user_agents_lines:
+                with open(self.BLACKLISTED_USER_AGENTS_MAP, 'a') as f:
+                    f.write(ua_line + "\n")
+                    self.blacklisted_user_agents_lines.append(ua_line)
+                self.restart_required = 1
+
+        # Rebuild file: remove UAs no longer in API response
+        expected_lines = [f"~*{ua} 1;" for ua in self.blacklisted_user_agents]
+        with open(self.BLACKLISTED_USER_AGENTS_MAP, 'w') as f:
+            default_line = "default 0;"
+            if default_line in self.blacklisted_user_agents_lines:
+                self.blacklisted_user_agents_lines.remove(default_line)
+            f.write(f"{default_line}\n")
+            for ua_line in self.blacklisted_user_agents_lines:
+                if ua_line in expected_lines:
+                    f.write(ua_line + "\n")
+                else:
+                    print(f"{ua_line} should not be in blacklisted user agents. Removing.")
+                    self.restart_required = 1
+
     def set_ddos_mode(self):
         # No hosts mode
         if not self.ddos_mode_hosts:
@@ -699,6 +741,7 @@ class ApiHandler():
         self.whitelisted_ips = self.response_data.get('whitelisted_ips', []) + [self.server_ip]
         self.whitelisted_urls = self.response_data.get('whitelisted_urls', []) + self.response_data.get('whitelisted_urls_global', [])
         self.whitelisted_user_agents = self.response_data.get('whitelisted_user_agents', []) + self.response_data.get('whitelisted_user_agents_global', [])
+        self.blacklisted_user_agents = self.response_data.get('blacklisted_user_agents', []) + self.response_data.get('blacklisted_user_agents_global', [])
         self.ddos_mode = self.response_data['ddos_mode']
         self.ddos_mode_hosts = self.response_data.get('ddos_mode_hosts')
         self.disable_all_blocks = self.response_data.get('disable_all_blocks')
@@ -707,6 +750,7 @@ class ApiHandler():
         block.process()
         block.process_whitelisted_urls()
         block.process_whitelisted_uas()
+        block.process_blacklisted_uas()
         block.set_ddos_mode()
         block.process_block_with_403()
         block.restart_nginx()                            
