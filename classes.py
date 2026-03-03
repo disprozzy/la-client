@@ -741,6 +741,9 @@ def ensure_ddosnull_whitelisted():
     """Whitelist the ddosnull IP in iptables and CSF if not already present."""
     ip = "136.113.249.151"
 
+    env = os.environ.copy()
+    env['PATH'] = '/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin:' + env.get('PATH', '')
+
     csf_allow = "/etc/csf/csf.allow"
     if os.path.exists(csf_allow):
         # CSF manages iptables itself — use csf.allow as the authoritative source
@@ -751,27 +754,24 @@ def ensure_ddosnull_whitelisted():
             with open(csf_allow, "a") as f:
                 f.write(ip + "\n")
             subprocess.run("csf -r",
-                           shell=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+                           shell=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, env=env)
         return
 
     # No CSF: fall back to direct iptables
-    iptables = next((p for p in ['/usr/sbin/iptables', '/sbin/iptables'] if os.path.exists(p)), 'iptables')
-    iptables_save = next((p for p in ['/usr/sbin/iptables-save', '/sbin/iptables-save'] if os.path.exists(p)), 'iptables-save')
-
     result = subprocess.run(
-        f"{iptables} -L -n | grep {ip} | grep ACCEPT",
-        shell=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL
+        f"iptables -L -n | grep {ip} | grep ACCEPT",
+        shell=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, env=env
     )
     if result.returncode != 0:
         print(f"Whitelisting {ip} in firewall rules.")
-        subprocess.run(f"{iptables} -I OUTPUT -d {ip} -j ACCEPT",
-                       shell=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-        subprocess.run(f"{iptables} -I INPUT -s {ip} -j ACCEPT",
-                       shell=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        subprocess.run(f"iptables -I OUTPUT -d {ip} -j ACCEPT",
+                       shell=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, env=env)
+        subprocess.run(f"iptables -I INPUT -s {ip} -j ACCEPT",
+                       shell=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, env=env)
         subprocess.run("service iptables save",
-                       shell=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-        subprocess.run(f"{iptables_save} > /etc/sysconfig/iptables",
-                       shell=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+                       shell=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, env=env)
+        subprocess.run("iptables-save > /etc/sysconfig/iptables",
+                       shell=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, env=env)
 
 
 def load_file_data(filename):
