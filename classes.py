@@ -336,7 +336,7 @@ default         0;
 
             if not needs_plesk_regen:
                 import glob as _glob
-                nginx_configs = _glob.glob('/var/www/vhosts/system/*/conf/nginx.conf')
+                nginx_configs = _glob.glob('/var/www/vhosts/system/*/conf/nginx*.conf')
                 if nginx_configs and not any(
                     'ddosnull_block_403' in open(cfg).read()
                     for cfg in nginx_configs
