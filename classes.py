@@ -345,8 +345,11 @@ default         0;
                     needs_plesk_regen = True
 
             if needs_plesk_regen:
-                run(['plesk', 'sbin', 'httpdmng', '--reconfigure-all'], check=False)
-                self.restart_required = 1
+                try:
+                    run(['/usr/sbin/plesk', 'sbin', 'httpdmng', '--reconfigure-all'], check=False)
+                    self.restart_required = 1
+                except FileNotFoundError:
+                    print("plesk binary not found, skipping reconfiguration")
 
         elif panel == 'cpanel' and os.path.exists(self.CPANEL_SERVER_INCLUDES):
             with open(self.CPANEL_SERVER_INCLUDES, 'r') as f:
