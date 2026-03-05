@@ -144,6 +144,7 @@ class Block:
     BLACKLISTED_USER_AGENTS_MAP = '/etc/nginx/maps/blacklisted_user_agents.map'
     WHITELISTED_URLS_MAP = '/etc/nginx/maps/whitelisted_urls.map'
     BLOCK_WITH_403_MAP = '/etc/nginx/maps/block_with_403.map'
+    DELISTED_IPS_MAP = '/etc/nginx/maps/delisted_ips.map'
     DDOSNULL_CONF = '/etc/nginx/conf.d/ddosnull.conf'
     PLESK_PROXY_PHP = '/usr/local/psa/admin/conf/templates/custom/domain/service/proxy.php'
     PLESK_VHOST_PHP = '/usr/local/psa/admin/conf/templates/custom/domain/nginxDomainVirtualHost.php'
@@ -151,6 +152,10 @@ class Block:
     EXPECTED_DDOSNULL_CONF = """# ---- Whitelist ----
 geo $remote_addr $is_whitelisted_ip {
 include /etc/nginx/maps/whitelisted_ips.map;
+}
+# ---- Delisted IPs ----
+geo $remote_addr $is_delisted_ip {
+include /etc/nginx/maps/delisted_ips.map;
 }
 # ---- Bot detection ----
 map $http_user_agent $is_bot {
@@ -188,9 +193,9 @@ geo $remote_addr $block_with_403_raw {
 include /etc/nginx/maps/block_with_403.map;
 }
 
-map "$block_with_403_raw:$is_whitelisted_ip" $block_with_403 {
+map "$block_with_403_raw:$is_whitelisted_ip:$is_delisted_ip" $block_with_403 {
 default 0;
-"1:0"   1;
+"1:0:0" 1;
 }
 
 map "$is_blacklisted_ua:$is_bot:$has_recaptcha_cookie:$ddos_mode:$is_suspicious_ip:$is_whitelisted_ip:$is_whitelisted_url" $needs_recaptcha {
@@ -225,6 +230,7 @@ default         0;
         self.ips_filename = '/etc/nginx/maps/suspicious_ip.map'
         self.ddos_filename = '/etc/nginx/maps/ddos_mode.map'
         self.whitelisted_ips_filename = '/etc/nginx/maps/whitelisted_ips.map'
+        self.delisted_ips_filename = self.DELISTED_IPS_MAP
         self.write_mode = 'a' if os.path.exists(self.filename) else 'w'
         self.server_ip = api_handler.server_ip
         self.restart_required = 0
@@ -242,6 +248,7 @@ default         0;
         self.ips_existing_lines = load_file_data(self.ips_filename)
         self.whitelisted_ips_lines = load_file_data(self.whitelisted_ips_filename)
 
+        self.delisted_ips_lines = load_file_data(self.delisted_ips_filename)
         self.whitelisted_urls_lines = load_file_data(self.WHITELISTED_URLS_MAP)
         self.bot_user_agents_lines = load_file_data(self.BOT_USER_AGENTS_MAP)
         self.blacklisted_user_agents_lines = load_file_data(self.BLACKLISTED_USER_AGENTS_MAP)
@@ -249,6 +256,7 @@ default         0;
 
         self.blocked_ips = api_handler.blocked_ips
         self.whitelisted_ips = api_handler.whitelisted_ips
+        self.delisted_ips = api_handler.delisted_ips
         self.whitelisted_urls = api_handler.whitelisted_urls
         self.whitelisted_user_agents = api_handler.whitelisted_user_agents
         self.blacklisted_user_agents = api_handler.blacklisted_user_agents
@@ -279,14 +287,21 @@ default         0;
             print(f"Created {self.WHITELISTED_URLS_MAP}")
             self.restart_required = 1
 
-        # 4. Ensure block_with_403.map exists
+        # 4. Ensure delisted_ips.map exists
+        if not os.path.exists(self.DELISTED_IPS_MAP):
+            with open(self.DELISTED_IPS_MAP, 'w') as f:
+                f.write("default 0;\n")
+            print(f"Created {self.DELISTED_IPS_MAP}")
+            self.restart_required = 1
+
+        # 5. Ensure block_with_403.map exists
         if not os.path.exists(self.BLOCK_WITH_403_MAP):
             with open(self.BLOCK_WITH_403_MAP, 'w') as f:
                 f.write("default 0;\n")
             print(f"Created {self.BLOCK_WITH_403_MAP}")
             self.restart_required = 1
 
-        # 5. Ensure ddosnull.conf matches expected content
+        # 6. Ensure ddosnull.conf matches expected content
         current_content = ""
         if os.path.exists(self.DDOSNULL_CONF):
             with open(self.DDOSNULL_CONF, 'r') as f:
@@ -463,6 +478,25 @@ default         0;
                     f.write(ip_line + "\n")
                 else:
                     print(f"{ip_line.split()[0]} should not be whitelisted. Removing.")
+                    self.restart_required = 1
+
+    def process_delisted_ips(self):
+        for ip in self.delisted_ips:
+            ip_line = f"{ip} 1;"
+            if ip_line not in self.delisted_ips_lines:
+                with open(self.delisted_ips_filename, 'a') as f:
+                    f.write(ip_line + "\n")
+                    self.delisted_ips_lines.append(ip_line)
+                self.restart_required = 1
+
+        with open(self.delisted_ips_filename, 'w') as f:
+            f.write("default 0;\n")
+            for ip_line in self.delisted_ips_lines:
+                ip = ip_line.split()[0]
+                if ip in self.delisted_ips:
+                    f.write(ip_line + "\n")
+                elif ip != "default":
+                    print(f"{ip} should not be delisted. Removing.")
                     self.restart_required = 1
 
     def process_whitelisted_urls(self):
@@ -743,6 +777,7 @@ class ApiHandler():
         
     def process_blocks(self):
         self.blocked_ips = self.response_data.get('blocked_ips', [])
+        self.delisted_ips = self.response_data.get('delisted_ips', [])
         self.whitelisted_ips = self.response_data.get('whitelisted_ips', []) + [self.server_ip]
         self.whitelisted_urls = self.response_data.get('whitelisted_urls', []) + self.response_data.get('whitelisted_urls_global', [])
         self.whitelisted_user_agents = self.response_data.get('whitelisted_user_agents', []) + self.response_data.get('whitelisted_user_agents_global', [])
@@ -753,6 +788,7 @@ class ApiHandler():
         self.networks_block_with_403 = self.response_data.get('block_with_403', [])
         block = Block(self)
         block.process()
+        block.process_delisted_ips()
         block.process_whitelisted_urls()
         block.process_whitelisted_uas()
         block.process_blacklisted_uas()
