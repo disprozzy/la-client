@@ -184,8 +184,13 @@ include /etc/nginx/maps/whitelisted_urls.map;
 }
 
 # ---- 403 Block Networks ----
-geo $remote_addr $block_with_403 {
+geo $remote_addr $block_with_403_raw {
 include /etc/nginx/maps/block_with_403.map;
+}
+
+map "$block_with_403_raw:$is_whitelisted_ip" $block_with_403 {
+default 0;
+"1:0"   1;
 }
 
 map "$is_blacklisted_ua:$is_bot:$has_recaptcha_cookie:$ddos_mode:$is_suspicious_ip:$is_whitelisted_ip:$is_whitelisted_url" $needs_recaptcha {
