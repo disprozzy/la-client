@@ -112,19 +112,17 @@ class LogParser:
             self.requests_by_domain[domain_name]['uniq_ips'] = len(self.requests_by_domain[domain_name]['uniq_ips'])
         
             
-    def process_checkout_ips(self):
-        """ Parse the logs and get a list of IP with number of orders submitted 
-            Blacklist the IP if submitted more than order per hour
-        """
+    def process_checkout_ips(self, threshold=2):
+        """ Parse the logs and get a dict of {ip: count} for IPs exceeding the threshold """
         self.checkout_logs = []
         self.ips_count = {}
-        self.suspicious_checkout_ips = []
+        self.suspicious_checkout_ips = {}
 
         for line in self.filtered_logs:
             for pattern in self.checkout_patterns:
                 if pattern in line:
                     self.checkout_logs.append(line)
-                    
+
         for i, line in enumerate(self.checkout_logs, 1):
             elements = line.split()
             ip = elements[0]
@@ -132,11 +130,10 @@ class LogParser:
                 self.ips_count[ip] += 1
             else:
                 self.ips_count[ip] = 1
-                
-        # we'll replace this to a setting later to adjust how many orders an IP can place before we block it
-        for ip in self.ips_count.keys():
-            if self.ips_count[ip] > 2:
-                self.suspicious_checkout_ips.append(ip)
+
+        for ip, count in self.ips_count.items():
+            if count > threshold:
+                self.suspicious_checkout_ips[ip] = count
                 
                         
 class Block:
@@ -652,10 +649,11 @@ class ApiHandler():
     def check_checkout_requests(self):
         ddos_mode = self.response_data['ddos_mode']
         checkout_endpoints = self.response_data.get('checkout_endpoints', [])
+        checkout_requests_soft = self.response_data.get('checkout_requests_soft', 2)
         if not ddos_mode:
             parser = LogParser(minutes=60, checkout_patterns=checkout_endpoints)
             parser.parse_logs()
-            parser.process_checkout_ips()
+            parser.process_checkout_ips(threshold=checkout_requests_soft)
             self.suspicious_checkout_ips = parser.suspicious_checkout_ips
 
             if self.suspicious_checkout_ips:
@@ -695,6 +693,8 @@ class ApiHandler():
                     'datatype': 'auto_ddos_mode',
                     'instance_id': self.instance_id,
                     'auto_ddos_mode': True,
+                    'checkout_total_requests': len(parser.checkout_logs),
+                    'checkout_unique_ips': len(parser.ips_count),
                     }
                 
                 response = requests.post(self.api_url, json=auto_ddos_payload)
