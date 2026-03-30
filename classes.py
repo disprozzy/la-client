@@ -650,23 +650,22 @@ class ApiHandler():
         ddos_mode = self.response_data['ddos_mode']
         checkout_endpoints = self.response_data.get('checkout_endpoints', [])
         checkout_requests_soft = self.response_data.get('checkout_requests_soft', 2)
-        if not ddos_mode:
-            parser = LogParser(minutes=60, checkout_patterns=checkout_endpoints)
-            parser.parse_logs()
-            parser.process_checkout_ips(threshold=checkout_requests_soft)
-            self.suspicious_checkout_ips = parser.suspicious_checkout_ips
+        parser = LogParser(minutes=60, checkout_patterns=checkout_endpoints)
+        parser.parse_logs()
+        parser.process_checkout_ips(threshold=checkout_requests_soft)
+        self.suspicious_checkout_ips = parser.suspicious_checkout_ips
 
-            if self.suspicious_checkout_ips:
-                payload = {
-                    'datatype': 'suspicious_checkout_ips',
-                    'instance_id': self.instance_id,
-                    'suspicious_checkout_ips': self.suspicious_checkout_ips,
-                }
+        if self.suspicious_checkout_ips:
+            payload = {
+                'datatype': 'suspicious_checkout_ips',
+                'instance_id': self.instance_id,
+                'suspicious_checkout_ips': self.suspicious_checkout_ips,
+            }
 
-                response = requests.post(self.api_url, json=payload)
-                self.susp_response_data = response.json()
+            response = requests.post(self.api_url, json=payload)
+            self.susp_response_data = response.json()
 
-                print(self.susp_response_data['message'])
+            print(self.susp_response_data['message'])
 
         """ Auto ddos mode
             Enable if too many ips are submitting request to checkout
