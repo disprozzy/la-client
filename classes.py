@@ -326,16 +326,27 @@ default         0;
                         "        }\n"
                     )
                     if 'needs_recaptcha' in proxy_content:
-                        new_content = proxy_content.replace(
+                        proxy_content = proxy_content.replace(
                             'if ($needs_recaptcha = 1)',
                             if_snippet + 'if ($needs_recaptcha = 1)',
                             1
                         )
                     else:
-                        new_content = if_snippet + proxy_content
+                        proxy_content = if_snippet + proxy_content
                     with open(self.PLESK_PROXY_PHP, 'w') as f:
-                        f.write(new_content)
+                        f.write(proxy_content)
                     print(f"Updated {self.PLESK_PROXY_PHP} with block_with_403 if-block")
+                    needs_plesk_regen = True
+                # Upgrade: replace 302 recaptcha redirect with inline 598 (preserves referrer)
+                if 'return 302 /recaptcha/?next=$request_uri' in proxy_content:
+                    proxy_content = proxy_content.replace(
+                        'return 302 /recaptcha/?next=$request_uri;',
+                        'return 598;',
+                        1
+                    )
+                    with open(self.PLESK_PROXY_PHP, 'w') as f:
+                        f.write(proxy_content)
+                    print(f"Updated {self.PLESK_PROXY_PHP}: recaptcha redirect changed to inline 598")
                     needs_plesk_regen = True
 
             # nginxDomainVirtualHost.php: error_page + named location (server block level)
@@ -344,6 +355,16 @@ default         0;
                     vhost_content = f.read()
                 if 'ddosnull_block_403' not in vhost_content:
                     location_snippet = (
+                        "        error_page 598 = @altcha_inline;\n"
+                        "        location @altcha_inline {\n"
+                        "                proxy_pass https://app.ddosnull.com:4433/recaptcha/;\n"
+                        "                proxy_set_header X-Forwarded-Proto $scheme;\n"
+                        "                proxy_ssl_server_name on;\n"
+                        "                proxy_ssl_name app.ddosnull.com;\n"
+                        "                proxy_set_header Host app.ddosnull.com;\n"
+                        "                proxy_set_header X-Real-IP $remote_addr;\n"
+                        "                proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;\n"
+                        "        }\n\n"
                         "        error_page 418 =403 @ddosnull_block_403;\n"
                         "        location @ddosnull_block_403 {\n"
                         "                internal;\n"
@@ -357,16 +378,42 @@ default         0;
                         "        }\n\n"
                     )
                     if '#block bots' in vhost_content:
-                        new_vhost_content = vhost_content.replace(
+                        vhost_content = vhost_content.replace(
                             '#block bots',
                             location_snippet + '#block bots',
                             1
                         )
                     else:
-                        new_vhost_content = location_snippet + vhost_content
+                        vhost_content = location_snippet + vhost_content
                     with open(self.PLESK_VHOST_PHP, 'w') as f:
-                        f.write(new_vhost_content)
+                        f.write(vhost_content)
                     print(f"Updated {self.PLESK_VHOST_PHP} with block_with_403 location")
+                    needs_plesk_regen = True
+                # Upgrade: add altcha_inline named location for existing installations
+                if 'altcha_inline' not in vhost_content:
+                    altcha_snippet = (
+                        "        error_page 598 = @altcha_inline;\n"
+                        "        location @altcha_inline {\n"
+                        "                proxy_pass https://app.ddosnull.com:4433/recaptcha/;\n"
+                        "                proxy_set_header X-Forwarded-Proto $scheme;\n"
+                        "                proxy_ssl_server_name on;\n"
+                        "                proxy_ssl_name app.ddosnull.com;\n"
+                        "                proxy_set_header Host app.ddosnull.com;\n"
+                        "                proxy_set_header X-Real-IP $remote_addr;\n"
+                        "                proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;\n"
+                        "        }\n\n"
+                    )
+                    if 'error_page 418 =403 @ddosnull_block_403' in vhost_content:
+                        vhost_content = vhost_content.replace(
+                            'error_page 418 =403 @ddosnull_block_403',
+                            altcha_snippet + 'error_page 418 =403 @ddosnull_block_403',
+                            1
+                        )
+                    else:
+                        vhost_content = altcha_snippet + vhost_content
+                    with open(self.PLESK_VHOST_PHP, 'w') as f:
+                        f.write(vhost_content)
+                    print(f"Updated {self.PLESK_VHOST_PHP} with altcha_inline location")
                     needs_plesk_regen = True
 
             if not needs_plesk_regen:
@@ -389,7 +436,7 @@ default         0;
         elif panel == 'cpanel' and os.path.exists(self.CPANEL_SERVER_INCLUDES):
             with open(self.CPANEL_SERVER_INCLUDES, 'r') as f:
                 includes_content = f.read()
-            if 'block_with_403' not in includes_content:
+            if 'block_with_403' not in includes_content or 'altcha_inline' not in includes_content:
                 cpanel_server_includes = (
                     "    location /recaptcha/ {\n"
                     "            proxy_pass https://app.ddosnull.com:4433;\n"
@@ -399,6 +446,16 @@ default         0;
                     "                    proxy_set_header Host app.ddosnull.com;\n"
                     "            proxy_set_header X-Real-IP $remote_addr;\n"
                     "            proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;\n"
+                    "        }\n\n"
+                    "        error_page 598 = @altcha_inline;\n"
+                    "        location @altcha_inline {\n"
+                    "                proxy_pass https://app.ddosnull.com:4433/recaptcha/;\n"
+                    "                proxy_set_header X-Forwarded-Proto $scheme;\n"
+                    "                proxy_ssl_server_name on;\n"
+                    "                proxy_ssl_name app.ddosnull.com;\n"
+                    "                proxy_set_header Host app.ddosnull.com;\n"
+                    "                proxy_set_header X-Real-IP $remote_addr;\n"
+                    "                proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;\n"
                     "        }\n\n"
                     "        error_page 418 =403 @ddosnull_block_403;\n"
                     "        location @ddosnull_block_403 {\n"
@@ -415,7 +472,7 @@ default         0;
                     "                return 418;\n"
                     "        }\n\n"
                     "        if ($needs_recaptcha = 1) {\n"
-                    "                return 302 /recaptcha/?next=$request_uri;\n"
+                    "                return 598;\n"
                     "        }"
                 )
                 with open(self.CPANEL_SERVER_INCLUDES, 'w') as f:
