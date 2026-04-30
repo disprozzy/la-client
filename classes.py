@@ -342,7 +342,6 @@ default         0;
                     proxy_content = proxy_content.replace(
                         'return 302 /recaptcha/?next=$request_uri;',
                         'return 598;',
-                        1
                     )
                     with open(self.PLESK_PROXY_PHP, 'w') as f:
                         f.write(proxy_content)
@@ -357,7 +356,8 @@ default         0;
                     location_snippet = (
                         "        error_page 598 = @altcha_inline;\n"
                         "        location @altcha_inline {\n"
-                        "                proxy_pass https://app.ddosnull.com:4433/recaptcha/;\n"
+                        "                rewrite ^ /recaptcha/ break;\n"
+                        "                proxy_pass https://app.ddosnull.com:4433;\n"
                         "                proxy_set_header X-Forwarded-Proto $scheme;\n"
                         "                proxy_ssl_server_name on;\n"
                         "                proxy_ssl_name app.ddosnull.com;\n"
@@ -394,7 +394,8 @@ default         0;
                     altcha_snippet = (
                         "        error_page 598 = @altcha_inline;\n"
                         "        location @altcha_inline {\n"
-                        "                proxy_pass https://app.ddosnull.com:4433/recaptcha/;\n"
+                        "                rewrite ^ /recaptcha/ break;\n"
+                        "                proxy_pass https://app.ddosnull.com:4433;\n"
                         "                proxy_set_header X-Forwarded-Proto $scheme;\n"
                         "                proxy_ssl_server_name on;\n"
                         "                proxy_ssl_name app.ddosnull.com;\n"
@@ -449,7 +450,8 @@ default         0;
                     "        }\n\n"
                     "        error_page 598 = @altcha_inline;\n"
                     "        location @altcha_inline {\n"
-                    "                proxy_pass https://app.ddosnull.com:4433/recaptcha/;\n"
+                    "                rewrite ^ /recaptcha/ break;\n"
+                    "                proxy_pass https://app.ddosnull.com:4433;\n"
                     "                proxy_set_header X-Forwarded-Proto $scheme;\n"
                     "                proxy_ssl_server_name on;\n"
                     "                proxy_ssl_name app.ddosnull.com;\n"
