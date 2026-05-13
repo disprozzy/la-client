@@ -757,6 +757,17 @@ class ApiHandler():
             print(response_data['message'])
     
     def submit_log_data(self):
+        # Set scan requested to false to prevent duplicated submissions if log parser takes more than 1 minute
+        payload = {
+            'datatype': 'log_parser_stared',
+            'instance_id': self.instance_id,
+        }
+        
+        response = requests.post(self.api_url, json=payload)
+        scan_started_response = response.json()
+        
+        print(scan_started_response['message'])    
+        
         """ Parse logs and submit data using API """
         parser = LogParser(minutes=self.response_data['minutes'])
         parser.parse_logs()
