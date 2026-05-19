@@ -742,20 +742,6 @@ class ApiHandler():
         self.auto_ddos_current_timeout = self.response_data.get('auto_ddos_current_timeout') or self.auto_ddos_timeout
         self.now_utc = datetime.now(timezone.utc)
 
-        # Check ddos mode evey time load stats are submitted and disable if expired
-        if self.auto_ddos_enabled_at and self.auto_ddos_current_timeout and self.auto_ddos_enabled_at + timedelta(minutes=self.auto_ddos_current_timeout) < self.now_utc:
-            auto_ddos_payload = {
-                'datatype': 'auto_ddos_mode',
-                'instance_id': self.instance_id,
-                'auto_ddos_mode': False,
-                }
-            
-            response = requests.post(self.api_url, json=auto_ddos_payload)
-            # Do not overwrite load_stats response data
-            response_data = response.json()
-            
-            print(response_data['message'])
-    
     def submit_log_data(self):
         """ Parse logs and submit data using API """
         parser = LogParser(minutes=self.response_data['minutes'])
