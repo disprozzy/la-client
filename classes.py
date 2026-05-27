@@ -499,7 +499,7 @@ default         0;
     def process_whitelisted_urls(self):
         # Add new URLs from API
         for url in self.whitelisted_urls:
-            url_line = f"~*\\{url} 1;"
+            url_line = f"{url} 1;"
             if url_line not in self.whitelisted_urls_lines:
                 with open(self.WHITELISTED_URLS_MAP, 'a') as f:
                     f.write(url_line + "\n")
