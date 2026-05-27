@@ -507,7 +507,7 @@ default         0;
                 self.restart_required = 1
 
         # Rebuild file: remove URLs no longer in API response
-        expected_lines = [f"~*\\{url} 1;" for url in self.whitelisted_urls]
+        expected_lines = [f"{url} 1;" for url in self.whitelisted_urls]
         with open(self.WHITELISTED_URLS_MAP, 'w') as f:
             default_line = "default 0;"
             if default_line in self.whitelisted_urls_lines:
