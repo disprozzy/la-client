@@ -170,11 +170,6 @@ map $http_user_agent $is_blacklisted_ua_403_raw {
 include /etc/nginx/maps/blacklisted_user_agents_403.map;
 }
 
-map "$is_blacklisted_ua_403_raw:$is_whitelisted_ip" $block_ua_with_403 {
-default 0;
-"1:0" 1;
-}
-
 # ---- Cookie check ----
 map $http_cookie $has_recaptcha_cookie {
 default 0;
@@ -201,9 +196,10 @@ geo $remote_addr $block_with_403_raw {
 include /etc/nginx/maps/block_with_403.map;
 }
 
-map "$block_with_403_raw:$is_whitelisted_ip:$is_delisted_ip" $block_with_403 {
+map "$block_with_403_raw:$is_blacklisted_ua_403_raw:$is_whitelisted_ip:$is_delisted_ip" $block_with_403 {
 default 0;
-"1:0:0" 1;
+"~^1:.:0:0" 1;
+"~^.:1:0:." 1;
 }
 
 map "$is_blacklisted_ua:$is_bot:$has_recaptcha_cookie:$ddos_mode:$is_suspicious_ip:$is_whitelisted_ip:$is_whitelisted_url" $needs_recaptcha {
@@ -341,9 +337,6 @@ default         0;
                     proxy_content = f.read()
                 if 'block_with_403' not in proxy_content:
                     if_snippet = (
-                        "        if ($block_ua_with_403 = 1) {\n"
-                        "                return 418;\n"
-                        "        }\n"
                         "        if ($block_with_403 = 1) {\n"
                         "                return 418;\n"
                         "        }\n"
@@ -359,21 +352,6 @@ default         0;
                     with open(self.PLESK_PROXY_PHP, 'w') as f:
                         f.write(new_content)
                     print(f"Updated {self.PLESK_PROXY_PHP} with block_with_403 if-block")
-                    needs_plesk_regen = True
-                elif 'block_ua_with_403' not in proxy_content:
-                    ua_403_snippet = (
-                        "        if ($block_ua_with_403 = 1) {\n"
-                        "                return 418;\n"
-                        "        }\n"
-                    )
-                    new_content = proxy_content.replace(
-                        'if ($block_with_403 = 1)',
-                        ua_403_snippet + 'if ($block_with_403 = 1)',
-                        1
-                    )
-                    with open(self.PLESK_PROXY_PHP, 'w') as f:
-                        f.write(new_content)
-                    print(f"Updated {self.PLESK_PROXY_PHP} with block_ua_with_403 if-block")
                     needs_plesk_regen = True
 
             # nginxDomainVirtualHost.php: error_page + named location (server block level)
@@ -427,7 +405,6 @@ default         0;
         elif panel == 'cpanel' and os.path.exists(self.CPANEL_SERVER_INCLUDES):
             with open(self.CPANEL_SERVER_INCLUDES, 'r') as f:
                 includes_content = f.read()
-            needs_cpanel_regen = False
             if 'block_with_403' not in includes_content:
                 cpanel_server_includes = (
                     "    location /recaptcha/ {\n"
@@ -450,9 +427,6 @@ default         0;
                     "                proxy_set_header X-Real-IP $remote_addr;\n"
                     "                proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;\n"
                     "        }\n\n"
-                    "        if ($block_ua_with_403 = 1) {\n"
-                    "                return 418;\n"
-                    "        }\n\n"
                     "        if ($block_with_403 = 1) {\n"
                     "                return 418;\n"
                     "        }\n\n"
@@ -463,23 +437,6 @@ default         0;
                 with open(self.CPANEL_SERVER_INCLUDES, 'w') as f:
                     f.write(cpanel_server_includes)
                 print(f"Updated {self.CPANEL_SERVER_INCLUDES} with block_with_403 directives")
-                needs_cpanel_regen = True
-            elif 'block_ua_with_403' not in includes_content:
-                ua_403_if = (
-                    "        if ($block_ua_with_403 = 1) {\n"
-                    "                return 418;\n"
-                    "        }\n\n"
-                )
-                new_includes = includes_content.replace(
-                    'if ($block_with_403 = 1)',
-                    ua_403_if + 'if ($block_with_403 = 1)',
-                    1
-                )
-                with open(self.CPANEL_SERVER_INCLUDES, 'w') as f:
-                    f.write(new_includes)
-                print(f"Updated {self.CPANEL_SERVER_INCLUDES} with block_ua_with_403 if-block")
-                needs_cpanel_regen = True
-            if needs_cpanel_regen:
                 run(['/usr/local/cpanel/scripts/ea-nginx', 'config', '--all'], check=False)
                 self.restart_required = 1
 
