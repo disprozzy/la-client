@@ -139,6 +139,7 @@ class LogParser:
 class Block:
     BOT_USER_AGENTS_MAP = '/etc/nginx/maps/bot_user_agents.map'
     BLACKLISTED_USER_AGENTS_MAP = '/etc/nginx/maps/blacklisted_user_agents.map'
+    BLACKLISTED_USER_AGENTS_403_MAP = '/etc/nginx/maps/blacklisted_user_agents_403.map'
     WHITELISTED_URLS_MAP = '/etc/nginx/maps/whitelisted_urls.map'
     BLOCK_WITH_403_MAP = '/etc/nginx/maps/block_with_403.map'
     DELISTED_IPS_MAP = '/etc/nginx/maps/delisted_ips.map'
@@ -162,6 +163,16 @@ include /etc/nginx/maps/bot_user_agents.map;
 # ---- Blacklisted UAs ----
 map $http_user_agent $is_blacklisted_ua {
 include /etc/nginx/maps/blacklisted_user_agents.map;
+}
+
+# ---- Blacklisted UAs (hard block 403) ----
+map $http_user_agent $is_blacklisted_ua_403_raw {
+include /etc/nginx/maps/blacklisted_user_agents_403.map;
+}
+
+map "$is_blacklisted_ua_403_raw:$is_whitelisted_ip" $block_ua_with_403 {
+default 0;
+"1:0" 1;
 }
 
 # ---- Cookie check ----
@@ -249,6 +260,7 @@ default         0;
         self.whitelisted_urls_lines = load_file_data(self.WHITELISTED_URLS_MAP)
         self.bot_user_agents_lines = load_file_data(self.BOT_USER_AGENTS_MAP)
         self.blacklisted_user_agents_lines = load_file_data(self.BLACKLISTED_USER_AGENTS_MAP)
+        self.blacklisted_user_agents_403_lines = load_file_data(self.BLACKLISTED_USER_AGENTS_403_MAP)
         self.block_with_403_lines = load_file_data(self.BLOCK_WITH_403_MAP)
 
         self.blocked_ips = api_handler.blocked_ips
@@ -257,6 +269,7 @@ default         0;
         self.whitelisted_urls = api_handler.whitelisted_urls
         self.whitelisted_user_agents = api_handler.whitelisted_user_agents
         self.blacklisted_user_agents = api_handler.blacklisted_user_agents
+        self.blacklisted_user_agents_403 = api_handler.blacklisted_user_agents_403
         self.ddos_mode = api_handler.ddos_mode
         self.ddos_mode_hosts = api_handler.ddos_mode_hosts
         self.disable_all_blocks = api_handler.disable_all_blocks
@@ -275,6 +288,13 @@ default         0;
             with open(self.BLACKLISTED_USER_AGENTS_MAP, 'w') as f:
                 f.write("default 0;\n")
             print(f"Created {self.BLACKLISTED_USER_AGENTS_MAP}")
+            self.restart_required = 1
+
+        # 2b. Ensure blacklisted_user_agents_403.map exists
+        if not os.path.exists(self.BLACKLISTED_USER_AGENTS_403_MAP):
+            with open(self.BLACKLISTED_USER_AGENTS_403_MAP, 'w') as f:
+                f.write("default 0;\n")
+            print(f"Created {self.BLACKLISTED_USER_AGENTS_403_MAP}")
             self.restart_required = 1
 
         # 3. Ensure whitelisted_urls.map exists
@@ -321,6 +341,9 @@ default         0;
                     proxy_content = f.read()
                 if 'block_with_403' not in proxy_content:
                     if_snippet = (
+                        "        if ($block_ua_with_403 = 1) {\n"
+                        "                return 418;\n"
+                        "        }\n"
                         "        if ($block_with_403 = 1) {\n"
                         "                return 418;\n"
                         "        }\n"
@@ -336,6 +359,21 @@ default         0;
                     with open(self.PLESK_PROXY_PHP, 'w') as f:
                         f.write(new_content)
                     print(f"Updated {self.PLESK_PROXY_PHP} with block_with_403 if-block")
+                    needs_plesk_regen = True
+                elif 'block_ua_with_403' not in proxy_content:
+                    ua_403_snippet = (
+                        "        if ($block_ua_with_403 = 1) {\n"
+                        "                return 418;\n"
+                        "        }\n"
+                    )
+                    new_content = proxy_content.replace(
+                        'if ($block_with_403 = 1)',
+                        ua_403_snippet + 'if ($block_with_403 = 1)',
+                        1
+                    )
+                    with open(self.PLESK_PROXY_PHP, 'w') as f:
+                        f.write(new_content)
+                    print(f"Updated {self.PLESK_PROXY_PHP} with block_ua_with_403 if-block")
                     needs_plesk_regen = True
 
             # nginxDomainVirtualHost.php: error_page + named location (server block level)
@@ -389,6 +427,7 @@ default         0;
         elif panel == 'cpanel' and os.path.exists(self.CPANEL_SERVER_INCLUDES):
             with open(self.CPANEL_SERVER_INCLUDES, 'r') as f:
                 includes_content = f.read()
+            needs_cpanel_regen = False
             if 'block_with_403' not in includes_content:
                 cpanel_server_includes = (
                     "    location /recaptcha/ {\n"
@@ -411,6 +450,9 @@ default         0;
                     "                proxy_set_header X-Real-IP $remote_addr;\n"
                     "                proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;\n"
                     "        }\n\n"
+                    "        if ($block_ua_with_403 = 1) {\n"
+                    "                return 418;\n"
+                    "        }\n\n"
                     "        if ($block_with_403 = 1) {\n"
                     "                return 418;\n"
                     "        }\n\n"
@@ -421,6 +463,23 @@ default         0;
                 with open(self.CPANEL_SERVER_INCLUDES, 'w') as f:
                     f.write(cpanel_server_includes)
                 print(f"Updated {self.CPANEL_SERVER_INCLUDES} with block_with_403 directives")
+                needs_cpanel_regen = True
+            elif 'block_ua_with_403' not in includes_content:
+                ua_403_if = (
+                    "        if ($block_ua_with_403 = 1) {\n"
+                    "                return 418;\n"
+                    "        }\n\n"
+                )
+                new_includes = includes_content.replace(
+                    'if ($block_with_403 = 1)',
+                    ua_403_if + 'if ($block_with_403 = 1)',
+                    1
+                )
+                with open(self.CPANEL_SERVER_INCLUDES, 'w') as f:
+                    f.write(new_includes)
+                print(f"Updated {self.CPANEL_SERVER_INCLUDES} with block_ua_with_403 if-block")
+                needs_cpanel_regen = True
+            if needs_cpanel_regen:
                 run(['/usr/local/cpanel/scripts/ea-nginx', 'config', '--all'], check=False)
                 self.restart_required = 1
 
@@ -566,6 +625,30 @@ default         0;
                     f.write(ua_line + "\n")
                 else:
                     print(f"{ua_line} should not be in blacklisted user agents. Removing.")
+                    self.restart_required = 1
+
+    def process_blacklisted_uas_403(self):
+        # Add new 403-blocked user agents from API
+        for ua in self.blacklisted_user_agents_403:
+            ua_line = f"~*{ua} 1;"
+            if ua_line not in self.blacklisted_user_agents_403_lines:
+                with open(self.BLACKLISTED_USER_AGENTS_403_MAP, 'a') as f:
+                    f.write(ua_line + "\n")
+                    self.blacklisted_user_agents_403_lines.append(ua_line)
+                self.restart_required = 1
+
+        # Rebuild file: remove UAs no longer in API response
+        expected_lines = [f"~*{ua} 1;" for ua in self.blacklisted_user_agents_403]
+        with open(self.BLACKLISTED_USER_AGENTS_403_MAP, 'w') as f:
+            default_line = "default 0;"
+            if default_line in self.blacklisted_user_agents_403_lines:
+                self.blacklisted_user_agents_403_lines.remove(default_line)
+            f.write(f"{default_line}\n")
+            for ua_line in self.blacklisted_user_agents_403_lines:
+                if ua_line in expected_lines:
+                    f.write(ua_line + "\n")
+                else:
+                    print(f"{ua_line} should not be in blacklisted_user_agents_403. Removing.")
                     self.restart_required = 1
 
     def set_ddos_mode(self):
@@ -767,6 +850,7 @@ class ApiHandler():
         self.whitelisted_urls = self.response_data.get('whitelisted_urls', []) + self.response_data.get('whitelisted_urls_global', [])
         self.whitelisted_user_agents = self.response_data.get('whitelisted_user_agents', []) + self.response_data.get('whitelisted_user_agents_global', [])
         self.blacklisted_user_agents = self.response_data.get('blacklisted_user_agents', []) + self.response_data.get('blacklisted_user_agents_global', [])
+        self.blacklisted_user_agents_403 = self.response_data.get('blacklisted_user_agents_403', []) + self.response_data.get('blacklisted_user_agents_403_global', [])
         self.ddos_mode = self.response_data['ddos_mode']
         self.ddos_mode_hosts = self.response_data.get('ddos_mode_hosts')
         self.disable_all_blocks = self.response_data.get('disable_all_blocks')
@@ -777,6 +861,7 @@ class ApiHandler():
         block.process_whitelisted_urls()
         block.process_whitelisted_uas()
         block.process_blacklisted_uas()
+        block.process_blacklisted_uas_403()
         block.set_ddos_mode()
         block.process_block_with_403()
         block.restart_nginx()                            
