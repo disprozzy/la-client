@@ -141,6 +141,7 @@ class Block:
     BLACKLISTED_USER_AGENTS_MAP = '/etc/nginx/maps/blacklisted_user_agents.map'
     BLACKLISTED_USER_AGENTS_403_MAP = '/etc/nginx/maps/blacklisted_user_agents_403.map'
     WHITELISTED_URLS_MAP = '/etc/nginx/maps/whitelisted_urls.map'
+    PROTECTED_URLS_MAP = '/etc/nginx/maps/protected_urls.map'
     BLOCK_WITH_403_MAP = '/etc/nginx/maps/block_with_403.map'
     DELISTED_IPS_MAP = '/etc/nginx/maps/delisted_ips.map'
     DDOSNULL_CONF = '/etc/nginx/conf.d/ddosnull.conf'
@@ -191,6 +192,11 @@ map $request_uri $is_whitelisted_url {
 include /etc/nginx/maps/whitelisted_urls.map;
 }
 
+# ---- Protected URLs (trigger recaptcha) ----
+map $request_uri $is_protected_url {
+include /etc/nginx/maps/protected_urls.map;
+}
+
 # ---- 403 Block Networks ----
 geo $remote_addr $block_with_403_raw {
 include /etc/nginx/maps/block_with_403.map;
@@ -202,7 +208,7 @@ default 0;
 "~^.:1:0:." 1;
 }
 
-map "$is_blacklisted_ua:$is_bot:$has_recaptcha_cookie:$ddos_mode:$is_suspicious_ip:$is_whitelisted_ip:$is_whitelisted_url" $needs_recaptcha {
+map "$is_blacklisted_ua:$is_bot:$has_recaptcha_cookie:$ddos_mode:$is_suspicious_ip:$is_whitelisted_ip:$is_whitelisted_url:$is_protected_url" $needs_recaptcha {
 default         0;
 
 # Skip for bots (whitelisted UAs)
@@ -212,7 +218,7 @@ default         0;
 "~^.*:.*:.*:.*:.*:1:." 0;
 
 # Skip if URL is whitelisted
-"~^.*:.*:.*:.*:.*:.:1" 0;
+"~^[^:]*:[^:]*:[^:]*:[^:]*:[^:]*:[^:]*:1" 0;
 
 # Skip if cookie present
 "~^.:.:1:.:.:.:."   0;
@@ -223,6 +229,9 @@ default         0;
 # Force check: DDoS ON or suspicious IP and no cookie
 "~^0:0:0:1:.:0:0"   1;
 "~^0:0:0:.:1:0:0"   1;
+
+# Force check: protected URL, no cookie, not whitelisted
+"~^0:0:0:0:0:0:0:1"   1;
 
 # All others: allow
 "~^0:0:0:0:0:0:0"   0;
@@ -254,6 +263,7 @@ default         0;
 
         self.delisted_ips_lines = load_file_data(self.delisted_ips_filename)
         self.whitelisted_urls_lines = load_file_data(self.WHITELISTED_URLS_MAP)
+        self.protected_urls_lines = load_file_data(self.PROTECTED_URLS_MAP)
         self.bot_user_agents_lines = load_file_data(self.BOT_USER_AGENTS_MAP)
         self.blacklisted_user_agents_lines = load_file_data(self.BLACKLISTED_USER_AGENTS_MAP)
         self.blacklisted_user_agents_403_lines = load_file_data(self.BLACKLISTED_USER_AGENTS_403_MAP)
@@ -263,6 +273,7 @@ default         0;
         self.whitelisted_ips = api_handler.whitelisted_ips
         self.delisted_ips = api_handler.delisted_ips
         self.whitelisted_urls = api_handler.whitelisted_urls
+        self.protected_urls = api_handler.protected_urls
         self.whitelisted_user_agents = api_handler.whitelisted_user_agents
         self.blacklisted_user_agents = api_handler.blacklisted_user_agents
         self.blacklisted_user_agents_403 = api_handler.blacklisted_user_agents_403
@@ -298,6 +309,13 @@ default         0;
             with open(self.WHITELISTED_URLS_MAP, 'w') as f:
                 f.write("default 0;\n")
             print(f"Created {self.WHITELISTED_URLS_MAP}")
+            self.restart_required = 1
+
+        # 3b. Ensure protected_urls.map exists
+        if not os.path.exists(self.PROTECTED_URLS_MAP):
+            with open(self.PROTECTED_URLS_MAP, 'w') as f:
+                f.write("default 0;\n")
+            print(f"Created {self.PROTECTED_URLS_MAP}")
             self.restart_required = 1
 
         # 4. Ensure delisted_ips.map exists
@@ -534,6 +552,30 @@ default         0;
                     f.write(url_line + "\n")
                 else:
                     print(f"{url_line} should not be whitelisted. Removing.")
+                    self.restart_required = 1
+
+    def process_protected_urls(self):
+        # Add new URLs from API
+        for url in self.protected_urls:
+            url_line = f"{url} 1;"
+            if url_line not in self.protected_urls_lines:
+                with open(self.PROTECTED_URLS_MAP, 'a') as f:
+                    f.write(url_line + "\n")
+                    self.protected_urls_lines.append(url_line)
+                self.restart_required = 1
+
+        # Rebuild file: remove URLs no longer in API response
+        expected_lines = [f"{url} 1;" for url in self.protected_urls]
+        with open(self.PROTECTED_URLS_MAP, 'w') as f:
+            default_line = "default 0;"
+            if default_line in self.protected_urls_lines:
+                self.protected_urls_lines.remove(default_line)
+            f.write(f"{default_line}\n")
+            for url_line in self.protected_urls_lines:
+                if url_line in expected_lines:
+                    f.write(url_line + "\n")
+                else:
+                    print(f"{url_line} should not be protected. Removing.")
                     self.restart_required = 1
 
     def process_whitelisted_uas(self):
@@ -805,6 +847,7 @@ class ApiHandler():
         self.delisted_ips = self.response_data.get('delisted_ips', [])
         self.whitelisted_ips = self.response_data.get('whitelisted_ips', []) + [self.server_ip]
         self.whitelisted_urls = self.response_data.get('whitelisted_urls', []) + self.response_data.get('whitelisted_urls_global', [])
+        self.protected_urls = self.response_data.get('protected_urls', [])
         self.whitelisted_user_agents = self.response_data.get('whitelisted_user_agents', []) + self.response_data.get('whitelisted_user_agents_global', [])
         self.blacklisted_user_agents = self.response_data.get('blacklisted_user_agents', []) + self.response_data.get('blacklisted_user_agents_global', [])
         self.blacklisted_user_agents_403 = self.response_data.get('blacklisted_user_agents_403', []) + self.response_data.get('blacklisted_user_agents_403_global', [])
@@ -816,6 +859,7 @@ class ApiHandler():
         block.process()
         block.process_delisted_ips()
         block.process_whitelisted_urls()
+        block.process_protected_urls()
         block.process_whitelisted_uas()
         block.process_blacklisted_uas()
         block.process_blacklisted_uas_403()
