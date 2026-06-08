@@ -530,10 +530,16 @@ default         0;
                     print(f"{ip} should not be delisted. Removing.")
                     self.restart_required = 1
 
+    @staticmethod
+    def _url_map_line(url):
+        if '{' in url or '}' in url:
+            return f'"{url}" 1;'
+        return f'{url} 1;'
+
     def process_whitelisted_urls(self):
         # Add new URLs from API
         for url in self.whitelisted_urls:
-            url_line = f"{url} 1;"
+            url_line = self._url_map_line(url)
             if url_line not in self.whitelisted_urls_lines:
                 with open(self.WHITELISTED_URLS_MAP, 'a') as f:
                     f.write(url_line + "\n")
@@ -541,7 +547,7 @@ default         0;
                 self.restart_required = 1
 
         # Rebuild file: remove URLs no longer in API response
-        expected_lines = [f"{url} 1;" for url in self.whitelisted_urls]
+        expected_lines = [self._url_map_line(url) for url in self.whitelisted_urls]
         with open(self.WHITELISTED_URLS_MAP, 'w') as f:
             default_line = "default 0;"
             if default_line in self.whitelisted_urls_lines:
@@ -557,7 +563,7 @@ default         0;
     def process_protected_urls(self):
         # Add new URLs from API
         for url in self.protected_urls:
-            url_line = f"{url} 1;"
+            url_line = self._url_map_line(url)
             if url_line not in self.protected_urls_lines:
                 with open(self.PROTECTED_URLS_MAP, 'a') as f:
                     f.write(url_line + "\n")
@@ -565,7 +571,7 @@ default         0;
                 self.restart_required = 1
 
         # Rebuild file: remove URLs no longer in API response
-        expected_lines = [f"{url} 1;" for url in self.protected_urls]
+        expected_lines = [self._url_map_line(url) for url in self.protected_urls]
         with open(self.PROTECTED_URLS_MAP, 'w') as f:
             default_line = "default 0;"
             if default_line in self.protected_urls_lines:
