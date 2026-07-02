@@ -143,6 +143,7 @@ class Block:
     WHITELISTED_URLS_MAP = '/etc/nginx/maps/whitelisted_urls.map'
     PROTECTED_URLS_MAP = '/etc/nginx/maps/protected_urls.map'
     BLOCK_WITH_403_MAP = '/etc/nginx/maps/block_with_403.map'
+    FAKE_UA_IPS_MAP = '/etc/nginx/maps/fake_ua_ips.map'
     DELISTED_IPS_MAP = '/etc/nginx/maps/delisted_ips.map'
     DDOSNULL_CONF = '/etc/nginx/conf.d/ddosnull.conf'
     PLESK_PROXY_PHP = '/usr/local/psa/admin/conf/templates/custom/domain/service/proxy.php'
@@ -202,10 +203,16 @@ geo $remote_addr $block_with_403_raw {
 include /etc/nginx/maps/block_with_403.map;
 }
 
-map "$block_with_403_raw:$is_blacklisted_ua_403_raw:$is_whitelisted_ip:$is_delisted_ip:$is_bot" $block_with_403 {
+# ---- Fake UA IPs (impersonators of whitelisted UAs - always block, ignore $is_bot) ----
+geo $remote_addr $is_fake_ua_ip {
+include /etc/nginx/maps/fake_ua_ips.map;
+}
+
+map "$block_with_403_raw:$is_blacklisted_ua_403_raw:$is_whitelisted_ip:$is_delisted_ip:$is_bot:$is_fake_ua_ip" $block_with_403 {
 default 0;
-"~^1:.:0:0:0" 1;
-"~^.:1:0:.:." 1;
+"~^1:.:0:0:0:." 1;
+"~^.:1:0:.:.:." 1;
+"~^.*:.*:0:0:.*:1" 1;
 }
 
 map "$is_blacklisted_ua:$is_bot:$has_recaptcha_cookie:$ddos_mode:$is_suspicious_ip:$is_whitelisted_ip:$is_whitelisted_url:$is_protected_url" $needs_recaptcha {
@@ -268,6 +275,7 @@ default         0;
         self.blacklisted_user_agents_lines = load_file_data(self.BLACKLISTED_USER_AGENTS_MAP)
         self.blacklisted_user_agents_403_lines = load_file_data(self.BLACKLISTED_USER_AGENTS_403_MAP)
         self.block_with_403_lines = load_file_data(self.BLOCK_WITH_403_MAP)
+        self.fake_ua_ips_lines = load_file_data(self.FAKE_UA_IPS_MAP)
 
         self.blocked_ips = api_handler.blocked_ips
         self.whitelisted_ips = api_handler.whitelisted_ips
@@ -281,6 +289,7 @@ default         0;
         self.ddos_mode_hosts = api_handler.ddos_mode_hosts
         self.disable_all_blocks = api_handler.disable_all_blocks
         self.networks_block_with_403 = api_handler.networks_block_with_403
+        self.fake_ua_ips = api_handler.fake_ua_ips
         
     def verify_nginx_config(self):
         # 1. Ensure bot_user_agents.map exists
@@ -330,6 +339,13 @@ default         0;
             with open(self.BLOCK_WITH_403_MAP, 'w') as f:
                 f.write("default 0;\n")
             print(f"Created {self.BLOCK_WITH_403_MAP}")
+            self.restart_required = 1
+
+        # 5b. Ensure fake_ua_ips.map exists
+        if not os.path.exists(self.FAKE_UA_IPS_MAP):
+            with open(self.FAKE_UA_IPS_MAP, 'w') as f:
+                f.write("default 0;\n")
+            print(f"Created {self.FAKE_UA_IPS_MAP}")
             self.restart_required = 1
 
         # 6. Ensure ddosnull.conf matches expected content
@@ -716,6 +732,29 @@ default         0;
                     print(f"{net_line.split()[0]} no longer in block_with_403. Removing.")
                     self.restart_required = 1
 
+    def process_fake_ua_ips(self):
+        # Add new fake UA IPs not yet in the map file
+        for ip in self.fake_ua_ips:
+            ip_line = f"{ip} 1;"
+            if ip_line not in self.fake_ua_ips_lines:
+                with open(self.FAKE_UA_IPS_MAP, 'a') as f:
+                    f.write(ip_line + "\n")
+                    self.fake_ua_ips_lines.append(ip_line)
+                self.restart_required = 1
+
+        # Rebuild file, removing entries no longer in the fake UA list
+        with open(self.FAKE_UA_IPS_MAP, 'w') as f:
+            default_line = "default 0;"
+            if default_line in self.fake_ua_ips_lines:
+                self.fake_ua_ips_lines.remove(default_line)
+            f.write(f"{default_line}\n")
+            for ip_line in self.fake_ua_ips_lines:
+                if ip_line.split()[0] in self.fake_ua_ips:
+                    f.write(ip_line + "\n")
+                else:
+                    print(f"{ip_line.split()[0]} no longer in fake_ua_ips. Removing.")
+                    self.restart_required = 1
+
     def restart_nginx(self):
         nginx_msg = ''
         if self.restart_required:
@@ -861,6 +900,7 @@ class ApiHandler():
         self.ddos_mode_hosts = self.response_data.get('ddos_mode_hosts')
         self.disable_all_blocks = self.response_data.get('disable_all_blocks')
         self.networks_block_with_403 = self.response_data.get('block_with_403', [])
+        self.fake_ua_ips = self.response_data.get('fake_ua_ips', [])
         block = Block(self)
         block.process()
         block.process_delisted_ips()
@@ -871,7 +911,8 @@ class ApiHandler():
         block.process_blacklisted_uas_403()
         block.set_ddos_mode()
         block.process_block_with_403()
-        block.restart_nginx()                            
+        block.process_fake_ua_ips()
+        block.restart_nginx()
         
 def get_server_external_ip():
     """Get the external IP address of the server from GCP metadata.
