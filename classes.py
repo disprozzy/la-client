@@ -398,7 +398,7 @@ default         0;
                         "        location @ddosnull_block_403 {\n"
                         "                internal;\n"
                         "                rewrite ^ /403 break;\n"
-                    "                proxy_pass https://app.ddosnull.com:4433;\n"
+                    "                proxy_pass https://app.ddosnull.com;\n"
                         "                proxy_ssl_server_name on;\n"
                         "                proxy_ssl_name app.ddosnull.com;\n"
                         "                proxy_set_header Host app.ddosnull.com;\n"
@@ -442,7 +442,7 @@ default         0;
             if 'block_with_403' not in includes_content:
                 cpanel_server_includes = (
                     "    location /recaptcha/ {\n"
-                    "            proxy_pass https://app.ddosnull.com:4433;\n"
+                    "            proxy_pass https://app.ddosnull.com;\n"
                     "                    proxy_set_header X-Forwarded-Proto $scheme;\n"
                     "                    proxy_ssl_server_name on;\n"
                     "                    proxy_ssl_name app.ddosnull.com;\n"
@@ -454,7 +454,7 @@ default         0;
                     "        location @ddosnull_block_403 {\n"
                     "                internal;\n"
                     "                rewrite ^ /403 break;\n"
-                    "                proxy_pass https://app.ddosnull.com:4433;\n"
+                    "                proxy_pass https://app.ddosnull.com;\n"
                     "                proxy_ssl_server_name on;\n"
                     "                proxy_ssl_name app.ddosnull.com;\n"
                     "                proxy_set_header Host app.ddosnull.com;\n"
