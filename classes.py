@@ -171,6 +171,8 @@ include /etc/nginx/maps/blacklisted_user_agents.map;
 map $http_user_agent $is_blacklisted_ua_403_raw {
 include /etc/nginx/maps/blacklisted_user_agents_403.map;
 }
+# Note: $is_bot is populated from whitelisted_user_agents; whitelisted UAs
+# take priority over blacklisted UAs (including 403 hard-block) below.
 
 # ---- Cookie check ----
 map $http_cookie $has_recaptcha_cookie {
@@ -211,7 +213,7 @@ include /etc/nginx/maps/fake_ua_ips.map;
 map "$block_with_403_raw:$is_blacklisted_ua_403_raw:$is_whitelisted_ip:$is_delisted_ip:$is_bot:$is_fake_ua_ip" $block_with_403 {
 default 0;
 "~^1:.:0:0:0:." 1;
-"~^.:1:0:.:.:." 1;
+"~^.:1:0:.:0:." 1;
 "~^.*:.*:0:0:.*:1" 1;
 }
 
