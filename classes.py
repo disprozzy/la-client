@@ -765,6 +765,12 @@ default         0;
                 nginx_msg = "Got updates for the block lists. Successfully reloaded nginx config to apply the changes."
             except CalledProcessError as e:
                 nginx_msg = f"Failed to reload Nginx: {e}"
+
+                try:
+                    run(["sudo", "systemctl", "restart", "nginx"], check=True)
+                    nginx_msg = f"Nginx is down, restarting."
+                except CalledProcessError as e:
+                    nginx_msg = f"Failed to restart Nginx: {e}"
             print(nginx_msg)            
         
 
