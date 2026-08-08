@@ -832,7 +832,12 @@ class ApiHandler():
             
                             
     def get_load_stats(self):
-        response = requests.get('http://127.0.0.1:80/nginx_status')
+        try:
+            response = requests.get('http://127.0.0.1:80/nginx_status')
+        except:
+            self.load1, self.load5, self.load15 = (0,0,0)
+            return
+        
         if response.status_code == 200:
             self.total_requests = response.text.strip().splitlines()[2].split()[2]
         
