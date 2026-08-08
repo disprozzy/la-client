@@ -842,6 +842,7 @@ class ApiHandler():
             response = requests.get('http://127.0.0.1:80/nginx_status')
         except:
             self.load1, self.load5, self.load15 = (0,0,0)
+            self.total_requests = 0
             return
         
         if response.status_code == 200:
