@@ -476,77 +476,40 @@ default         0;
                 run(['/usr/local/cpanel/scripts/ea-nginx', 'config', '--all'], check=False)
                 self.restart_required = 1
 
+    def _rebuild_map_file(self, filename, lines_attr, expected_lines, default_line="default 0;", label="entry"):
+        """Diff expected_lines against the cached map file contents and rewrite it in one pass."""
+        existing_set = set(getattr(self, lines_attr)) - {default_line}
+        expected_set = set(expected_lines)
+
+        if expected_set != existing_set:
+            self.restart_required = 1
+            for line in existing_set - expected_set:
+                print(f"{line.split()[0]} no longer in {label}. Removing.")
+
+        new_lines = [default_line] + expected_lines
+        setattr(self, lines_attr, new_lines)
+        with open(filename, 'w') as f:
+            f.write("\n".join(new_lines) + "\n")
+
     def process(self):
         """ 403 rules """
-        """
-        for ip in self.blocked_ips:
-            ip_line = f"deny {ip};"
-            if ip_line not in self.existing_lines and ip not in self.whitelisted_ips and ip != self.server_ip:
-                with open(self.filename, 'a') as f:
-                    f.write(ip_line + "\n")
-                restart_required = 1
-        """                
-                
-        for ip in self.blocked_ips:
-            ip_line = f"{ip} 1;"
-            if ip_line not in self.ips_existing_lines and ip not in self.whitelisted_ips and ip != self.server_ip:
-                with open(self.ips_filename, 'a') as f:
-                    f.write(ip_line + "\n")
-                    self.ips_existing_lines.append(ip_line)
-                self.restart_required = 1            
-                
-        # Check if we do not have IPs blocked, which are not in DB
-        # load updates ip lines
-        with open(self.ips_filename, 'w') as f:
-            default_line = f"default 0;"
-            if default_line in self.ips_existing_lines:
-                self.ips_existing_lines.remove(default_line)
-            f.write(f"{default_line}\n")
-            for ip_line in self.ips_existing_lines:
-                if ip_line.split()[0] in self.blocked_ips:
-                    f.write(ip_line + "\n")
-                else:
-                    print(f"{ip_line.split()[0]} should not be blocked. Removing.")
-                    self.restart_required = 1    
-                    
-        for ip in self.whitelisted_ips:
-            ip_line = f"{ip} 1;"
-            if ip_line not in self.whitelisted_ips_lines:
-                with open(self.whitelisted_ips_filename, 'a') as f:
-                    f.write(ip_line + "\n")
-                    self.whitelisted_ips_lines.append(ip_line)
-                self.restart_required = 1
-                
-        with open(self.whitelisted_ips_filename, 'w') as f:
-            default_line = "default 1;" if self.disable_all_blocks else "default 0;"
-            if default_line in self.whitelisted_ips_lines:
-                self.whitelisted_ips_lines.remove(default_line)
-            f.write(f"{default_line}\n")
-            for ip_line in self.whitelisted_ips_lines:
-                if ip_line.split()[0] in self.whitelisted_ips:
-                    f.write(ip_line + "\n")
-                else:
-                    print(f"{ip_line.split()[0]} should not be whitelisted. Removing.")
-                    self.restart_required = 1
+        whitelisted_set = set(self.whitelisted_ips)
+        expected_blocked = list(dict.fromkeys(
+            f"{ip} 1;" for ip in self.blocked_ips
+            if ip not in whitelisted_set and ip != self.server_ip
+        ))
+        self._rebuild_map_file(self.ips_filename, 'ips_existing_lines', expected_blocked, label="blocked")
+
+        expected_whitelisted = list(dict.fromkeys(f"{ip} 1;" for ip in self.whitelisted_ips))
+        whitelisted_default = "default 1;" if self.disable_all_blocks else "default 0;"
+        self._rebuild_map_file(
+            self.whitelisted_ips_filename, 'whitelisted_ips_lines', expected_whitelisted,
+            default_line=whitelisted_default, label="whitelisted"
+        )
 
     def process_delisted_ips(self):
-        for ip in self.delisted_ips:
-            ip_line = f"{ip} 1;"
-            if ip_line not in self.delisted_ips_lines:
-                with open(self.delisted_ips_filename, 'a') as f:
-                    f.write(ip_line + "\n")
-                    self.delisted_ips_lines.append(ip_line)
-                self.restart_required = 1
-
-        with open(self.delisted_ips_filename, 'w') as f:
-            f.write("default 0;\n")
-            for ip_line in self.delisted_ips_lines:
-                ip = ip_line.split()[0]
-                if ip in self.delisted_ips:
-                    f.write(ip_line + "\n")
-                elif ip != "default":
-                    print(f"{ip} should not be delisted. Removing.")
-                    self.restart_required = 1
+        expected = list(dict.fromkeys(f"{ip} 1;" for ip in self.delisted_ips))
+        self._rebuild_map_file(self.delisted_ips_filename, 'delisted_ips_lines', expected, label="delisted")
 
     @staticmethod
     def _url_map_line(url):
@@ -555,124 +518,24 @@ default         0;
         return f'{url} 1;'
 
     def process_whitelisted_urls(self):
-        # Add new URLs from API
-        for url in self.whitelisted_urls:
-            url_line = self._url_map_line(url)
-            if url_line not in self.whitelisted_urls_lines:
-                with open(self.WHITELISTED_URLS_MAP, 'a') as f:
-                    f.write(url_line + "\n")
-                    self.whitelisted_urls_lines.append(url_line)
-                self.restart_required = 1
-
-        # Rebuild file: remove URLs no longer in API response
-        expected_lines = [self._url_map_line(url) for url in self.whitelisted_urls]
-        with open(self.WHITELISTED_URLS_MAP, 'w') as f:
-            default_line = "default 0;"
-            if default_line in self.whitelisted_urls_lines:
-                self.whitelisted_urls_lines.remove(default_line)
-            f.write(f"{default_line}\n")
-            for url_line in self.whitelisted_urls_lines:
-                if url_line in expected_lines:
-                    f.write(url_line + "\n")
-                else:
-                    print(f"{url_line} should not be whitelisted. Removing.")
-                    self.restart_required = 1
+        expected = list(dict.fromkeys(self._url_map_line(url) for url in self.whitelisted_urls))
+        self._rebuild_map_file(self.WHITELISTED_URLS_MAP, 'whitelisted_urls_lines', expected, label="whitelisted_urls")
 
     def process_protected_urls(self):
-        # Add new URLs from API
-        for url in self.protected_urls:
-            url_line = self._url_map_line(url)
-            if url_line not in self.protected_urls_lines:
-                with open(self.PROTECTED_URLS_MAP, 'a') as f:
-                    f.write(url_line + "\n")
-                    self.protected_urls_lines.append(url_line)
-                self.restart_required = 1
-
-        # Rebuild file: remove URLs no longer in API response
-        expected_lines = [self._url_map_line(url) for url in self.protected_urls]
-        with open(self.PROTECTED_URLS_MAP, 'w') as f:
-            default_line = "default 0;"
-            if default_line in self.protected_urls_lines:
-                self.protected_urls_lines.remove(default_line)
-            f.write(f"{default_line}\n")
-            for url_line in self.protected_urls_lines:
-                if url_line in expected_lines:
-                    f.write(url_line + "\n")
-                else:
-                    print(f"{url_line} should not be protected. Removing.")
-                    self.restart_required = 1
+        expected = list(dict.fromkeys(self._url_map_line(url) for url in self.protected_urls))
+        self._rebuild_map_file(self.PROTECTED_URLS_MAP, 'protected_urls_lines', expected, label="protected_urls")
 
     def process_whitelisted_uas(self):
-        # Add new user agents from API
-        for ua in self.whitelisted_user_agents:
-            ua_line = f"~*{ua} 1;"
-            if ua_line not in self.bot_user_agents_lines:
-                with open(self.BOT_USER_AGENTS_MAP, 'a') as f:
-                    f.write(ua_line + "\n")
-                    self.bot_user_agents_lines.append(ua_line)
-                self.restart_required = 1
-
-        # Rebuild file: remove UAs no longer in API response
-        expected_lines = [f"~*{ua} 1;" for ua in self.whitelisted_user_agents]
-        with open(self.BOT_USER_AGENTS_MAP, 'w') as f:
-            default_line = "default 0;"
-            if default_line in self.bot_user_agents_lines:
-                self.bot_user_agents_lines.remove(default_line)
-            f.write(f"{default_line}\n")
-            for ua_line in self.bot_user_agents_lines:
-                if ua_line in expected_lines:
-                    f.write(ua_line + "\n")
-                else:
-                    print(f"{ua_line} should not be in bot user agents. Removing.")
-                    self.restart_required = 1
+        expected = list(dict.fromkeys(f"~*{ua} 1;" for ua in self.whitelisted_user_agents))
+        self._rebuild_map_file(self.BOT_USER_AGENTS_MAP, 'bot_user_agents_lines', expected, label="bot user agents")
 
     def process_blacklisted_uas(self):
-        # Add new blacklisted user agents from API
-        for ua in self.blacklisted_user_agents:
-            ua_line = f"~*{ua} 1;"
-            if ua_line not in self.blacklisted_user_agents_lines:
-                with open(self.BLACKLISTED_USER_AGENTS_MAP, 'a') as f:
-                    f.write(ua_line + "\n")
-                    self.blacklisted_user_agents_lines.append(ua_line)
-                self.restart_required = 1
-
-        # Rebuild file: remove UAs no longer in API response
-        expected_lines = [f"~*{ua} 1;" for ua in self.blacklisted_user_agents]
-        with open(self.BLACKLISTED_USER_AGENTS_MAP, 'w') as f:
-            default_line = "default 0;"
-            if default_line in self.blacklisted_user_agents_lines:
-                self.blacklisted_user_agents_lines.remove(default_line)
-            f.write(f"{default_line}\n")
-            for ua_line in self.blacklisted_user_agents_lines:
-                if ua_line in expected_lines:
-                    f.write(ua_line + "\n")
-                else:
-                    print(f"{ua_line} should not be in blacklisted user agents. Removing.")
-                    self.restart_required = 1
+        expected = list(dict.fromkeys(f"~*{ua} 1;" for ua in self.blacklisted_user_agents))
+        self._rebuild_map_file(self.BLACKLISTED_USER_AGENTS_MAP, 'blacklisted_user_agents_lines', expected, label="blacklisted user agents")
 
     def process_blacklisted_uas_403(self):
-        # Add new 403-blocked user agents from API
-        for ua in self.blacklisted_user_agents_403:
-            ua_line = f"~*{ua} 1;"
-            if ua_line not in self.blacklisted_user_agents_403_lines:
-                with open(self.BLACKLISTED_USER_AGENTS_403_MAP, 'a') as f:
-                    f.write(ua_line + "\n")
-                    self.blacklisted_user_agents_403_lines.append(ua_line)
-                self.restart_required = 1
-
-        # Rebuild file: remove UAs no longer in API response
-        expected_lines = [f"~*{ua} 1;" for ua in self.blacklisted_user_agents_403]
-        with open(self.BLACKLISTED_USER_AGENTS_403_MAP, 'w') as f:
-            default_line = "default 0;"
-            if default_line in self.blacklisted_user_agents_403_lines:
-                self.blacklisted_user_agents_403_lines.remove(default_line)
-            f.write(f"{default_line}\n")
-            for ua_line in self.blacklisted_user_agents_403_lines:
-                if ua_line in expected_lines:
-                    f.write(ua_line + "\n")
-                else:
-                    print(f"{ua_line} should not be in blacklisted_user_agents_403. Removing.")
-                    self.restart_required = 1
+        expected = list(dict.fromkeys(f"~*{ua} 1;" for ua in self.blacklisted_user_agents_403))
+        self._rebuild_map_file(self.BLACKLISTED_USER_AGENTS_403_MAP, 'blacklisted_user_agents_403_lines', expected, label="blacklisted_user_agents_403")
 
     def set_ddos_mode(self):
         # No hosts mode
@@ -712,50 +575,12 @@ default         0;
             
             
     def process_block_with_403(self):
-        # Add new networks not yet in the map file
-        for network in self.networks_block_with_403:
-            net_line = f"{network} 1;"
-            if net_line not in self.block_with_403_lines:
-                with open(self.BLOCK_WITH_403_MAP, 'a') as f:
-                    f.write(net_line + "\n")
-                    self.block_with_403_lines.append(net_line)
-                self.restart_required = 1
-
-        # Rebuild file, removing entries no longer in the 403 block list
-        with open(self.BLOCK_WITH_403_MAP, 'w') as f:
-            default_line = "default 0;"
-            if default_line in self.block_with_403_lines:
-                self.block_with_403_lines.remove(default_line)
-            f.write(f"{default_line}\n")
-            for net_line in self.block_with_403_lines:
-                if net_line.split()[0] in self.networks_block_with_403:
-                    f.write(net_line + "\n")
-                else:
-                    print(f"{net_line.split()[0]} no longer in block_with_403. Removing.")
-                    self.restart_required = 1
+        expected = list(dict.fromkeys(f"{network} 1;" for network in self.networks_block_with_403))
+        self._rebuild_map_file(self.BLOCK_WITH_403_MAP, 'block_with_403_lines', expected, label="block_with_403")
 
     def process_fake_ua_ips(self):
-        # Add new fake UA IPs not yet in the map file
-        for ip in self.fake_ua_ips:
-            ip_line = f"{ip} 1;"
-            if ip_line not in self.fake_ua_ips_lines:
-                with open(self.FAKE_UA_IPS_MAP, 'a') as f:
-                    f.write(ip_line + "\n")
-                    self.fake_ua_ips_lines.append(ip_line)
-                self.restart_required = 1
-
-        # Rebuild file, removing entries no longer in the fake UA list
-        with open(self.FAKE_UA_IPS_MAP, 'w') as f:
-            default_line = "default 0;"
-            if default_line in self.fake_ua_ips_lines:
-                self.fake_ua_ips_lines.remove(default_line)
-            f.write(f"{default_line}\n")
-            for ip_line in self.fake_ua_ips_lines:
-                if ip_line.split()[0] in self.fake_ua_ips:
-                    f.write(ip_line + "\n")
-                else:
-                    print(f"{ip_line.split()[0]} no longer in fake_ua_ips. Removing.")
-                    self.restart_required = 1
+        expected = list(dict.fromkeys(f"{ip} 1;" for ip in self.fake_ua_ips))
+        self._rebuild_map_file(self.FAKE_UA_IPS_MAP, 'fake_ua_ips_lines', expected, label="fake_ua_ips")
 
     def restart_nginx(self):
         nginx_msg = ''
