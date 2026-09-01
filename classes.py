@@ -142,6 +142,7 @@ class Block:
     BLACKLISTED_USER_AGENTS_403_MAP = '/etc/nginx/maps/blacklisted_user_agents_403.map'
     WHITELISTED_URLS_MAP = '/etc/nginx/maps/whitelisted_urls.map'
     PROTECTED_URLS_MAP = '/etc/nginx/maps/protected_urls.map'
+    DISABLED_HOSTS_MAP = '/etc/nginx/maps/disabled_hosts.map'
     BLOCK_WITH_403_MAP = '/etc/nginx/maps/block_with_403.map'
     FAKE_UA_IPS_MAP = '/etc/nginx/maps/fake_ua_ips.map'
     DELISTED_IPS_MAP = '/etc/nginx/maps/delisted_ips.map'
@@ -190,6 +191,11 @@ map $host $ddos_mode {
 include /etc/nginx/maps/ddos_mode.map;
 }
 
+# ---- Disabled hosts (skip all checks) ----
+map $host $is_disabled_host {
+include /etc/nginx/maps/disabled_hosts.map;
+}
+
 # ---- Whitelisted URLs (skip recaptcha) ----
 map $request_uri $is_whitelisted_url {
 include /etc/nginx/maps/whitelisted_urls.map;
@@ -210,15 +216,22 @@ geo $remote_addr $is_fake_ua_ip {
 include /etc/nginx/maps/fake_ua_ips.map;
 }
 
-map "$block_with_403_raw:$is_blacklisted_ua_403_raw:$is_whitelisted_ip:$is_delisted_ip:$is_bot:$is_fake_ua_ip" $block_with_403 {
+map "$block_with_403_raw:$is_blacklisted_ua_403_raw:$is_whitelisted_ip:$is_delisted_ip:$is_bot:$is_fake_ua_ip:$is_disabled_host" $block_with_403 {
 default 0;
+
+# Skip if host is disabled
+"~^.*:.*:.*:.*:.*:.*:1" 0;
+
 "~^1:.:0:0:0:." 1;
 "~^.:1:0:.:0:." 1;
 "~^.*:.*:0:0:.*:1" 1;
 }
 
-map "$is_blacklisted_ua:$is_bot:$has_recaptcha_cookie:$ddos_mode:$is_suspicious_ip:$is_whitelisted_ip:$is_whitelisted_url:$is_protected_url" $needs_recaptcha {
+map "$is_blacklisted_ua:$is_bot:$has_recaptcha_cookie:$ddos_mode:$is_suspicious_ip:$is_whitelisted_ip:$is_whitelisted_url:$is_protected_url:$is_disabled_host" $needs_recaptcha {
 default         0;
+
+# Skip if host is disabled
+"~^.*:.*:.*:.*:.*:.*:.*:.*:1" 0;
 
 # Skip for bots (whitelisted UAs)
 "~^.:1:.*"        0;
@@ -273,6 +286,7 @@ default         0;
         self.delisted_ips_lines = load_file_data(self.delisted_ips_filename)
         self.whitelisted_urls_lines = load_file_data(self.WHITELISTED_URLS_MAP)
         self.protected_urls_lines = load_file_data(self.PROTECTED_URLS_MAP)
+        self.disabled_hosts_lines = load_file_data(self.DISABLED_HOSTS_MAP)
         self.bot_user_agents_lines = load_file_data(self.BOT_USER_AGENTS_MAP)
         self.blacklisted_user_agents_lines = load_file_data(self.BLACKLISTED_USER_AGENTS_MAP)
         self.blacklisted_user_agents_403_lines = load_file_data(self.BLACKLISTED_USER_AGENTS_403_MAP)
@@ -284,6 +298,7 @@ default         0;
         self.delisted_ips = api_handler.delisted_ips
         self.whitelisted_urls = api_handler.whitelisted_urls
         self.protected_urls = api_handler.protected_urls
+        self.disabled_hosts = api_handler.disabled_hosts
         self.whitelisted_user_agents = api_handler.whitelisted_user_agents
         self.blacklisted_user_agents = api_handler.blacklisted_user_agents
         self.blacklisted_user_agents_403 = api_handler.blacklisted_user_agents_403
@@ -327,6 +342,13 @@ default         0;
             with open(self.PROTECTED_URLS_MAP, 'w') as f:
                 f.write("default 0;\n")
             print(f"Created {self.PROTECTED_URLS_MAP}")
+            self.restart_required = 1
+
+        # 3c. Ensure disabled_hosts.map exists
+        if not os.path.exists(self.DISABLED_HOSTS_MAP):
+            with open(self.DISABLED_HOSTS_MAP, 'w') as f:
+                f.write("default 0;\n")
+            print(f"Created {self.DISABLED_HOSTS_MAP}")
             self.restart_required = 1
 
         # 4. Ensure delisted_ips.map exists
@@ -524,6 +546,10 @@ default         0;
     def process_protected_urls(self):
         expected = list(dict.fromkeys(self._url_map_line(url) for url in self.protected_urls))
         self._rebuild_map_file(self.PROTECTED_URLS_MAP, 'protected_urls_lines', expected, label="protected_urls")
+
+    def process_disabled_hosts(self):
+        expected = list(dict.fromkeys(f"{host} 1;" for host in self.disabled_hosts))
+        self._rebuild_map_file(self.DISABLED_HOSTS_MAP, 'disabled_hosts_lines', expected, label="disabled_hosts")
 
     def process_whitelisted_uas(self):
         expected = list(dict.fromkeys(f"~*{ua} 1;" for ua in self.whitelisted_user_agents))
@@ -732,6 +758,7 @@ class ApiHandler():
         self.whitelisted_ips = self.response_data.get('whitelisted_ips', []) + [self.server_ip]
         self.whitelisted_urls = self.response_data.get('whitelisted_urls', []) + self.response_data.get('whitelisted_urls_global', [])
         self.protected_urls = self.response_data.get('protected_urls', [])
+        self.disabled_hosts = self.response_data.get('disabled_hosts', [])
         self.whitelisted_user_agents = self.response_data.get('whitelisted_user_agents', []) + self.response_data.get('whitelisted_user_agents_global', [])
         self.blacklisted_user_agents = self.response_data.get('blacklisted_user_agents', []) + self.response_data.get('blacklisted_user_agents_global', [])
         self.blacklisted_user_agents_403 = self.response_data.get('blacklisted_user_agents_403', []) + self.response_data.get('blacklisted_user_agents_403_global', [])
@@ -745,6 +772,7 @@ class ApiHandler():
         block.process_delisted_ips()
         block.process_whitelisted_urls()
         block.process_protected_urls()
+        block.process_disabled_hosts()
         block.process_whitelisted_uas()
         block.process_blacklisted_uas()
         block.process_blacklisted_uas_403()
