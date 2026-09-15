@@ -5,6 +5,20 @@ import os, sys
 import requests
 import subprocess
 import json
+import fcntl
+
+LOCK_FILE = "/tmp/api_handler.lock"
+
+def acquire_lock():
+    """Return an open file handle holding an exclusive non-blocking lock,
+    or None if another instance is already running."""
+    lock_fd = open(LOCK_FILE, "w")
+    try:
+        fcntl.flock(lock_fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+    except BlockingIOError:
+        lock_fd.close()
+        return None
+    return lock_fd
 
 class LogParser:
     def __init__(self,

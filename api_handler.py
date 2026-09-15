@@ -1,6 +1,12 @@
-from classes import ApiHandler, run_bash_script, ensure_ddosnull_whitelisted
+from classes import ApiHandler, run_bash_script, ensure_ddosnull_whitelisted, acquire_lock
 import subprocess
 import os
+import sys
+
+lock_fd = acquire_lock()
+if lock_fd is None:
+    print("api_handler is already running. Exiting.")
+    sys.exit(0)
 
 # run the updates first to avoid errors
 result = subprocess.run(
