@@ -861,7 +861,7 @@ def ensure_ddosnull_whitelisted():
 def load_file_data(filename):
         if os.path.exists(filename):
             with open(filename, 'r') as f:
-                return [stripped for line in f if (stripped := line.strip())]
+                return [line.strip() for line in f if line.strip()]
         else:
             return []
         
