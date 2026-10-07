@@ -3,16 +3,21 @@ import subprocess
 import os
 import sys
 
+# run the updates first to avoid errors; done before taking the lock so a
+# stuck run can never keep instances from picking up fixes
+try:
+    result = subprocess.run(
+        ['git', 'pull', 'origin', 'master'],
+        cwd='/opt/la-client',
+        timeout=120,
+    )
+except subprocess.TimeoutExpired:
+    print("git pull timed out. Continuing with the current version.")
+
 lock_fd = acquire_lock()
 if lock_fd is None:
     print("api_handler is already running. Exiting.")
     sys.exit(0)
-
-# run the updates first to avoid errors
-result = subprocess.run(
-    ['git', 'pull', 'origin', 'master'],
-    cwd='/opt/la-client',
-)
 
 ensure_ddosnull_whitelisted()
 

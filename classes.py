@@ -9,6 +9,11 @@ import fcntl
 
 LOCK_FILE = "/tmp/api_handler.lock"
 
+# request timeouts in seconds, so a hung backend can't hold the lock forever
+REQUEST_TIMEOUT = 120
+SCAN_REQUEST_TIMEOUT = 300
+LOCAL_REQUEST_TIMEOUT = 5
+
 def acquire_lock():
     """Return an open file handle holding an exclusive non-blocking lock,
     or None if another instance is already running."""
@@ -662,7 +667,7 @@ class ApiHandler():
                 'suspicious_checkout_ips': self.suspicious_checkout_ips,
             }
 
-            response = requests.post(self.api_url, json=payload)
+            response = requests.post(self.api_url, json=payload, timeout=REQUEST_TIMEOUT)
             self.susp_response_data = response.json()
 
             print(self.susp_response_data['message'])
@@ -696,7 +701,7 @@ class ApiHandler():
                     'checkout_unique_ips': len(parser.ips_count),
                     }
                 
-                response = requests.post(self.api_url, json=auto_ddos_payload)
+                response = requests.post(self.api_url, json=auto_ddos_payload, timeout=REQUEST_TIMEOUT)
                 self.response_data = response.json()
                 
                 print(self.response_data['message'])
@@ -704,7 +709,7 @@ class ApiHandler():
                             
     def get_load_stats(self):
         try:
-            response = requests.get('http://127.0.0.1:80/nginx_status')
+            response = requests.get('http://127.0.0.1:80/nginx_status', timeout=LOCAL_REQUEST_TIMEOUT)
         except:
             self.load1, self.load5, self.load15 = (0,0,0)
             self.total_requests = 0
@@ -727,7 +732,7 @@ class ApiHandler():
         }
         
         try:
-            response = requests.post(self.api_url, json=payload)
+            response = requests.post(self.api_url, json=payload, timeout=REQUEST_TIMEOUT)
             self.response_data = response.json()
             print(self.response_data['message'])
         except:
@@ -761,7 +766,7 @@ class ApiHandler():
             'ips_by_domain': parser.ips_by_domain
         }
         
-        response = requests.post(self.api_url, json=scan_payload)
+        response = requests.post(self.api_url, json=scan_payload, timeout=SCAN_REQUEST_TIMEOUT)
         log_data_response = response.json()
         
         print(log_data_response['message'])    
@@ -803,16 +808,16 @@ def get_server_external_ip():
     headers = {"Metadata-Flavor": "Google"}
 
     try:
-        response = requests.get(url, headers=headers)
+        response = requests.get(url, headers=headers, timeout=LOCAL_REQUEST_TIMEOUT)
     except Exception:
-        response = requests.get(furl, headers=headers)
+        response = requests.get(furl, headers=headers, timeout=REQUEST_TIMEOUT)
         
     return response.text
 
 def run_bash_script(url):
     script_path = "/tmp/myscript.sh"
     # Download
-    response = requests.get(url)
+    response = requests.get(url, timeout=REQUEST_TIMEOUT)
     response.raise_for_status()  # stop if request failed
 
     with open(script_path, "wb") as f:
