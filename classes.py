@@ -1021,6 +1021,14 @@ NGINX_CONF_GLOBS = [
     '/etc/nginx/modules.conf.d/*.conf',   # Plesk
     '/etc/nginx/modules-enabled/*.conf',  # Debian/Ubuntu
     '/etc/nginx/modules/*.conf',
+    '/usr/share/nginx/modules/*.conf',    # RHEL/CentOS/Alma nginx packages
+]
+GEOIP_MODULE_DIRS = [
+    '/usr/lib64/nginx/modules',
+    '/usr/lib/nginx/modules',
+    '/usr/share/nginx/modules',
+    '/etc/nginx/modules',
+    '/usr/local/nginx/modules',
 ]
 
 
@@ -1035,46 +1043,95 @@ def _strip_comments(text):
     return "\n".join(line.split('#', 1)[0] for line in text.splitlines())
 
 
+def _nginx_config_files():
+    """Yield (path, text) for every config file nginx actually loads.
+
+    Prefers `nginx -T`, which follows every include (whatever the distro/panel layout);
+    falls back to scanning NGINX_CONF_GLOBS if nginx -T is unavailable or fails.
+    """
+    nginx = _nginx_binary()
+    if nginx:
+        try:
+            result = run([nginx, '-T'], stdout=subprocess.PIPE, stderr=subprocess.PIPE, universal_newlines=True, timeout=60)
+            if result.returncode == 0 and result.stdout:
+                parts = re.split(r'^# configuration file (.+?):\s*$', result.stdout, flags=re.M)
+                # parts = [preamble, path1, text1, path2, text2, ...]
+                files = [(parts[i].strip(), parts[i + 1]) for i in range(1, len(parts) - 1, 2)]
+                if files:
+                    return files
+        except Exception:
+            pass
+
+    files = []
+    for pattern in NGINX_CONF_GLOBS:
+        for path in glob.glob(pattern):
+            if not os.path.isfile(path):
+                continue
+            try:
+                with open(path, 'r', errors='ignore') as f:
+                    files.append((path, f.read()))
+            except OSError:
+                continue
+    return files
+
+
+def _nginx_build_info():
+    nginx = _nginx_binary()
+    if not nginx:
+        return ''
+    try:
+        result = run([nginx, '-V'], stdout=subprocess.PIPE, stderr=subprocess.PIPE, universal_newlines=True, timeout=LOCAL_REQUEST_TIMEOUT)
+        return (result.stdout or '') + (result.stderr or '')
+    except Exception:
+        return ''
+
+
+def _geoip2_module_file(build_info):
+    """Path of an installed (not necessarily loaded) ngx_http_geoip2_module.so, or None."""
+    dirs = []
+    m = re.search(r'--modules-path=(\S+)', build_info)
+    if m:
+        dirs.append(m.group(1))
+    dirs += GEOIP_MODULE_DIRS
+    for d in dirs:
+        for path in glob.glob(os.path.join(d, '*geoip2*.so')):
+            if 'stream' not in os.path.basename(path):
+                return path
+    return None
+
+
 def detect_geoip2():
     """Detect whether $geoip2_data_country_code can be used in nginx.
 
-    Returns {'status': 'ok'|'no_module'|'no_db', 'mode': 'system'|'ours'|None, 'mmdb': path|None}
+    Returns {'status': 'ok'|'no_module'|'not_loaded'|'no_db', 'mode': 'system'|'ours'|None, 'mmdb': path|None}
       system - the variable is already defined by the server's own nginx config (e.g. Plesk)
       ours   - the module is available and we define the variable in ddosnull.conf
+      not_loaded - the dynamic module .so is installed but no load_module directive loads it
     Our own ddosnull.conf is excluded so its geoip2 block isn't mistaken for a system one.
     """
     own = {os.path.realpath(Block.DDOSNULL_CONF), os.path.realpath(Block.CPANEL_SERVER_INCLUDES)}
     variable_defined = False
     module_loaded = False
 
-    for pattern in NGINX_CONF_GLOBS:
-        for path in glob.glob(pattern):
-            if os.path.realpath(path) in own or not os.path.isfile(path):
-                continue
-            try:
-                with open(path, 'r', errors='ignore') as f:
-                    text = _strip_comments(f.read())
-            except OSError:
-                continue
-            if re.search(r'^\s*load_module\s+\S*geoip2\S*\.so', text, re.M):
-                module_loaded = True
-            if re.search(r'\bgeoip2\s+\S+\s*\{', text) and re.search(r'^\s*\$geoip2_data_country_code\s', text, re.M):
-                variable_defined = True
+    for path, raw in _nginx_config_files():
+        if os.path.realpath(path) in own:
+            continue
+        text = _strip_comments(raw)
+        if re.search(r'^\s*load_module\s+\S*geoip2\S*\.so', text, re.M):
+            module_loaded = True
+        if re.search(r'\bgeoip2\s+\S+\s*\{', text) and re.search(r'^\s*\$geoip2_data_country_code\s', text, re.M):
+            variable_defined = True
 
     if variable_defined:
         return {'status': 'ok', 'mode': 'system', 'mmdb': None}
 
     if not module_loaded:
-        nginx = _nginx_binary()
-        if nginx:
-            try:
-                result = run([nginx, '-V'], stdout=subprocess.PIPE, stderr=subprocess.PIPE, universal_newlines=True, timeout=LOCAL_REQUEST_TIMEOUT)
-                build_info = (result.stdout or '') + (result.stderr or '')
-                # statically compiled module (a --add-dynamic-module still needs load_module)
-                if re.search(r'--add-module=\S*geoip2', build_info):
-                    module_loaded = True
-            except Exception:
-                pass
+        build_info = _nginx_build_info()
+        # statically compiled module (a --add-dynamic-module still needs load_module)
+        if re.search(r'--add-module=\S*geoip2', build_info):
+            module_loaded = True
+        elif _geoip2_module_file(build_info) or re.search(r'--add-dynamic-module=\S*geoip2', build_info):
+            return {'status': 'not_loaded', 'mode': None, 'mmdb': None}
 
     if not module_loaded:
         return {'status': 'no_module', 'mode': None, 'mmdb': None}
