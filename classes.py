@@ -6,6 +6,10 @@ import requests
 import subprocess
 import json
 import fcntl
+import glob
+import hashlib
+import re
+import shutil
 
 LOCK_FILE = "/tmp/api_handler.lock"
 
@@ -165,11 +169,13 @@ class Block:
     BLOCK_WITH_403_MAP = '/etc/nginx/maps/block_with_403.map'
     FAKE_UA_IPS_MAP = '/etc/nginx/maps/fake_ua_ips.map'
     DELISTED_IPS_MAP = '/etc/nginx/maps/delisted_ips.map'
+    COUNTRY_SOFT_MAP = '/etc/nginx/maps/country_block.map'
+    COUNTRY_HARD_MAP = '/etc/nginx/maps/country_block_403.map'
     DDOSNULL_CONF = '/etc/nginx/conf.d/ddosnull.conf'
     PLESK_PROXY_PHP = '/usr/local/psa/admin/conf/templates/custom/domain/service/proxy.php'
     PLESK_VHOST_PHP = '/usr/local/psa/admin/conf/templates/custom/domain/nginxDomainVirtualHost.php'
     CPANEL_SERVER_INCLUDES = '/etc/nginx/conf.d/server-includes/ddosnull.conf'
-    EXPECTED_DDOSNULL_CONF = """# ---- Whitelist ----
+    DDOSNULL_CONF_HEAD = """# ---- Whitelist ----
 geo $remote_addr $is_whitelisted_ip {
 include /etc/nginx/maps/whitelisted_ips.map;
 }
@@ -235,7 +241,8 @@ geo $remote_addr $is_fake_ua_ip {
 include /etc/nginx/maps/fake_ua_ips.map;
 }
 
-map "$block_with_403_raw:$is_blacklisted_ua_403_raw:$is_whitelisted_ip:$is_delisted_ip:$is_bot:$is_fake_ua_ip:$is_disabled_host" $block_with_403 {
+"""
+    DDOSNULL_CONF_COMPOSITE = """map "$block_with_403_raw:$is_blacklisted_ua_403_raw:$is_whitelisted_ip:$is_delisted_ip:$is_bot:$is_fake_ua_ip:$is_disabled_host" $block_with_403_base {
 default 0;
 
 # Skip if host is disabled
@@ -246,7 +253,7 @@ default 0;
 "~^.*:.*:0:0:.*:1" 1;
 }
 
-map "$is_blacklisted_ua:$is_bot:$has_recaptcha_cookie:$ddos_mode:$is_suspicious_ip:$is_whitelisted_ip:$is_whitelisted_url:$is_protected_url:$is_disabled_host" $needs_recaptcha {
+map "$is_blacklisted_ua:$is_bot:$has_recaptcha_cookie:$ddos_mode:$is_suspicious_ip:$is_whitelisted_ip:$is_whitelisted_url:$is_protected_url:$is_disabled_host" $needs_recaptcha_base {
 default         0;
 
 # Skip if host is disabled
@@ -277,7 +284,58 @@ default         0;
 # All others: allow
 "~^0:0:0:0:0:0:0"   0;
 }
+
+# ---- Final decisions: base rules + country blocking ----
+# Country hard block: 403 unless the IP/UA/URL is whitelisted or the host is disabled.
+map "$block_with_403_base:$is_country_blocked_403:$is_whitelisted_ip:$is_bot:$is_whitelisted_url:$is_disabled_host" $block_with_403 {
+default 0;
+"~^1:" 1;
+"~^0:1:0:0:0:0$" 1;
+}
+
+# Country soft block: recaptcha unless verified (cookie) or whitelisted, same as DDoS mode.
+map "$needs_recaptcha_base:$is_country_blocked:$is_bot:$has_recaptcha_cookie:$is_whitelisted_ip:$is_whitelisted_url:$is_disabled_host" $needs_recaptcha {
+default 0;
+"~^1:" 1;
+"~^0:1:0:0:0:0:0$" 1;
+}
 """
+
+    @classmethod
+    def country_conf_section(cls, geoip):
+        """nginx config for the country variables. Only references
+        $geoip2_data_country_code when GeoIP2 was detected as usable,
+        otherwise defines constant-0 stubs so the composite maps stay valid."""
+        if geoip and geoip.get('status') == 'ok':
+            section = "# ---- Country blocking (GeoIP2) ----\n"
+            if geoip.get('mode') == 'ours':
+                section += (
+                    f"geoip2 {geoip['mmdb']} {{\n"
+                    "$geoip2_data_country_code country iso_code;\n"
+                    "}\n"
+                )
+            section += (
+                "map $geoip2_data_country_code $is_country_blocked {\n"
+                f"include {cls.COUNTRY_SOFT_MAP};\n"
+                "}\n"
+                "map $geoip2_data_country_code $is_country_blocked_403 {\n"
+                f"include {cls.COUNTRY_HARD_MAP};\n"
+                "}\n\n"
+            )
+            return section
+        return (
+            "# ---- Country blocking (GeoIP2 not available - disabled) ----\n"
+            "map $host $is_country_blocked {\n"
+            "default 0;\n"
+            "}\n"
+            "map $host $is_country_blocked_403 {\n"
+            "default 0;\n"
+            "}\n\n"
+        )
+
+    @classmethod
+    def build_ddosnull_conf(cls, geoip=None):
+        return cls.DDOSNULL_CONF_HEAD + cls.country_conf_section(geoip) + cls.DDOSNULL_CONF_COMPOSITE
 
     def __init__(self, api_handler):
         self.filename = '/etc/nginx/conf.d/la.conf'
@@ -288,6 +346,8 @@ default         0;
         self.write_mode = 'a' if os.path.exists(self.filename) else 'w'
         self.server_ip = api_handler.server_ip
         self.restart_required = 0
+        self.geoip = getattr(api_handler, 'geoip', None) or {'status': 'no_module', 'mode': None, 'mmdb': None}
+        self.geoip_status = self.geoip['status']
         self.verify_nginx_config()
 
         if os.path.exists(self.filename):
@@ -311,6 +371,8 @@ default         0;
         self.blacklisted_user_agents_403_lines = load_file_data(self.BLACKLISTED_USER_AGENTS_403_MAP)
         self.block_with_403_lines = load_file_data(self.BLOCK_WITH_403_MAP)
         self.fake_ua_ips_lines = load_file_data(self.FAKE_UA_IPS_MAP)
+        self.country_soft_lines = load_file_data(self.COUNTRY_SOFT_MAP)
+        self.country_hard_lines = load_file_data(self.COUNTRY_HARD_MAP)
 
         self.blocked_ips = api_handler.blocked_ips
         self.whitelisted_ips = api_handler.whitelisted_ips
@@ -326,6 +388,7 @@ default         0;
         self.disable_all_blocks = api_handler.disable_all_blocks
         self.networks_block_with_403 = api_handler.networks_block_with_403
         self.fake_ua_ips = api_handler.fake_ua_ips
+        self.country_block = getattr(api_handler, 'country_block', None) or {'mode': 'off'}
         
     def verify_nginx_config(self):
         # 1. Ensure bot_user_agents.map exists
@@ -391,17 +454,46 @@ default         0;
             print(f"Created {self.FAKE_UA_IPS_MAP}")
             self.restart_required = 1
 
+        # 5c. Ensure country block map files exist
+        for country_map in (self.COUNTRY_SOFT_MAP, self.COUNTRY_HARD_MAP):
+            if not os.path.exists(country_map):
+                with open(country_map, 'w') as f:
+                    f.write("default 0;\n")
+                print(f"Created {country_map}")
+                self.restart_required = 1
+
         # 6. Ensure ddosnull.conf matches expected content
         current_content = ""
         if os.path.exists(self.DDOSNULL_CONF):
             with open(self.DDOSNULL_CONF, 'r') as f:
                 current_content = f.read()
 
-        if current_content != self.EXPECTED_DDOSNULL_CONF:
+        expected_conf = self.build_ddosnull_conf(self.geoip)
+        if current_content != expected_conf:
             with open(self.DDOSNULL_CONF, 'w') as f:
-                f.write(self.EXPECTED_DDOSNULL_CONF)
+                f.write(expected_conf)
             print(f"Updated {self.DDOSNULL_CONF}")
             self.restart_required = 1
+
+            # GeoIP2 config is new on this server: make sure nginx accepts it,
+            # otherwise fall back to the stub so a reload can't take nginx down.
+            if self.geoip_status == 'ok':
+                if nginx_config_ok():
+                    clear_geoip_failed_marker()
+                else:
+                    stub_conf = self.build_ddosnull_conf(None)
+                    with open(self.DDOSNULL_CONF, 'w') as f:
+                        f.write(stub_conf)
+                    if nginx_config_ok():
+                        print("nginx rejected the GeoIP2 config. Country blocking disabled on this server.")
+                        write_geoip_failed_marker(expected_conf)
+                        self.geoip = {'status': 'config_error', 'mode': None, 'mmdb': None}
+                        self.geoip_status = 'config_error'
+                    else:
+                        # nginx config is broken for another reason, not ours
+                        with open(self.DDOSNULL_CONF, 'w') as f:
+                            f.write(expected_conf)
+                        print("nginx -t fails independently of the GeoIP2 config. Keeping it.")
 
         # 6. Check panel-specific server block configs for block_with_403 directives
         panel = detect_panel()
@@ -627,6 +719,39 @@ default         0;
         expected = list(dict.fromkeys(f"{ip} 1;" for ip in self.fake_ua_ips))
         self._rebuild_map_file(self.FAKE_UA_IPS_MAP, 'fake_ua_ips_lines', expected, label="fake_ua_ips")
 
+    def process_country_block(self):
+        """Populate the soft (captcha) and hard (403) country maps.
+
+        blocklist:  default 0, listed countries 1 (soft and hard lists separately)
+        allowlist:  default 1, allowed countries 0 (in the map matching the action);
+                    the empty code (private/unknown IPs) is always allowed.
+        """
+        cb = self.country_block or {}
+        mode = cb.get('mode', 'off') if self.geoip_status == 'ok' else 'off'
+
+        def codes(key):
+            return [c.upper() for c in cb.get(key, []) or [] if re.fullmatch(r'[A-Za-z]{2}', str(c))]
+
+        soft_default, soft_lines = "default 0;", []
+        hard_default, hard_lines = "default 0;", []
+
+        if mode == 'blocklist':
+            soft_lines = list(dict.fromkeys(f"{c} 1;" for c in codes('soft')))
+            hard_lines = list(dict.fromkeys(f"{c} 1;" for c in codes('hard')))
+        elif mode == 'allowlist':
+            allowed = list(dict.fromkeys(f"{c} 0;" for c in codes('allowed')))
+            if allowed:
+                allowed.append('"" 0;')
+                if cb.get('allowlist_action') == '403':
+                    hard_default, hard_lines = "default 1;", allowed
+                else:
+                    soft_default, soft_lines = "default 1;", allowed
+
+        self._rebuild_map_file(self.COUNTRY_SOFT_MAP, 'country_soft_lines', soft_lines,
+                               default_line=soft_default, label="country_block")
+        self._rebuild_map_file(self.COUNTRY_HARD_MAP, 'country_hard_lines', hard_lines,
+                               default_line=hard_default, label="country_block_403")
+
     def restart_nginx(self):
         nginx_msg = ''
         if self.restart_required:
@@ -707,6 +832,17 @@ class ApiHandler():
                 print(self.response_data['message'])
             
                             
+    def detect_geoip(self):
+        """Check whether nginx can resolve $geoip2_data_country_code on this server."""
+        try:
+            self.geoip = detect_geoip2()
+        except Exception as e:
+            print(f"GeoIP2 detection failed: {e}")
+            self.geoip = {'status': 'no_module', 'mode': None, 'mmdb': None}
+        # Don't retry a config nginx already rejected until something changes
+        if self.geoip['status'] == 'ok' and geoip_failed_marker_matches(Block.build_ddosnull_conf(self.geoip)):
+            self.geoip = {'status': 'config_error', 'mode': None, 'mmdb': None}
+
     def get_load_stats(self):
         try:
             response = requests.get('http://127.0.0.1:80/nginx_status', timeout=LOCAL_REQUEST_TIMEOUT)
@@ -729,6 +865,7 @@ class ApiHandler():
             'load5': self.load5,
             'load15': self.load15,
             'ip': self.server_ip,
+            'geoip_status': getattr(self, 'geoip', {}).get('status'),
         }
         
         try:
@@ -786,6 +923,9 @@ class ApiHandler():
         self.disable_all_blocks = self.response_data.get('disable_all_blocks')
         self.networks_block_with_403 = self.response_data.get('block_with_403', [])
         self.fake_ua_ips = self.response_data.get('fake_ua_ips', [])
+        self.country_block = self.response_data.get('country_block') or {'mode': 'off'}
+        if not hasattr(self, 'geoip'):
+            self.detect_geoip()
         block = Block(self)
         block.process()
         block.process_delisted_ips()
@@ -798,6 +938,7 @@ class ApiHandler():
         block.set_ddos_mode()
         block.process_block_with_403()
         block.process_fake_ua_ips()
+        block.process_country_block()
         block.restart_nginx()
         
 def get_server_external_ip():
@@ -861,6 +1002,127 @@ def ensure_ddosnull_whitelisted():
                        shell=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, env=env)
         subprocess.run("iptables-save > /etc/sysconfig/iptables",
                        shell=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, env=env)
+
+
+GEOIP_FAILED_MARKER = '/etc/nginx/maps/.ddosnull_geoip_failed'
+GEOIP_MMDB_CANDIDATES = [
+    '/usr/share/GeoIP/GeoLite2-Country.mmdb',
+    '/usr/share/GeoIP/GeoIP2-Country.mmdb',
+    '/usr/local/share/GeoIP/GeoLite2-Country.mmdb',
+    '/usr/local/share/GeoIP/GeoIP2-Country.mmdb',
+    '/var/lib/GeoIP/GeoLite2-Country.mmdb',
+    '/etc/nginx/geoip/GeoLite2-Country.mmdb',
+    '/etc/nginx/geoip/GeoIP2-Country.mmdb',
+]
+NGINX_CONF_GLOBS = [
+    '/etc/nginx/nginx.conf',
+    '/etc/nginx/conf.d/*.conf',
+    '/etc/nginx/conf.d/modules/*.conf',   # cPanel ea-nginx
+    '/etc/nginx/modules.conf.d/*.conf',   # Plesk
+    '/etc/nginx/modules-enabled/*.conf',  # Debian/Ubuntu
+    '/etc/nginx/modules/*.conf',
+]
+
+
+def _nginx_binary():
+    for candidate in (shutil.which('nginx'), '/usr/sbin/nginx', '/usr/local/sbin/nginx'):
+        if candidate and os.path.exists(candidate):
+            return candidate
+    return None
+
+
+def _strip_comments(text):
+    return "\n".join(line.split('#', 1)[0] for line in text.splitlines())
+
+
+def detect_geoip2():
+    """Detect whether $geoip2_data_country_code can be used in nginx.
+
+    Returns {'status': 'ok'|'no_module'|'no_db', 'mode': 'system'|'ours'|None, 'mmdb': path|None}
+      system - the variable is already defined by the server's own nginx config (e.g. Plesk)
+      ours   - the module is available and we define the variable in ddosnull.conf
+    Our own ddosnull.conf is excluded so its geoip2 block isn't mistaken for a system one.
+    """
+    own = {os.path.realpath(Block.DDOSNULL_CONF), os.path.realpath(Block.CPANEL_SERVER_INCLUDES)}
+    variable_defined = False
+    module_loaded = False
+
+    for pattern in NGINX_CONF_GLOBS:
+        for path in glob.glob(pattern):
+            if os.path.realpath(path) in own or not os.path.isfile(path):
+                continue
+            try:
+                with open(path, 'r', errors='ignore') as f:
+                    text = _strip_comments(f.read())
+            except OSError:
+                continue
+            if re.search(r'^\s*load_module\s+\S*geoip2\S*\.so', text, re.M):
+                module_loaded = True
+            if re.search(r'\bgeoip2\s+\S+\s*\{', text) and re.search(r'^\s*\$geoip2_data_country_code\s', text, re.M):
+                variable_defined = True
+
+    if variable_defined:
+        return {'status': 'ok', 'mode': 'system', 'mmdb': None}
+
+    if not module_loaded:
+        nginx = _nginx_binary()
+        if nginx:
+            try:
+                result = run([nginx, '-V'], stdout=subprocess.PIPE, stderr=subprocess.PIPE, universal_newlines=True, timeout=LOCAL_REQUEST_TIMEOUT)
+                build_info = (result.stdout or '') + (result.stderr or '')
+                # statically compiled module (a --add-dynamic-module still needs load_module)
+                if re.search(r'--add-module=\S*geoip2', build_info):
+                    module_loaded = True
+            except Exception:
+                pass
+
+    if not module_loaded:
+        return {'status': 'no_module', 'mode': None, 'mmdb': None}
+
+    for mmdb in GEOIP_MMDB_CANDIDATES:
+        if os.path.isfile(mmdb) and os.path.getsize(mmdb) > 0:
+            return {'status': 'ok', 'mode': 'ours', 'mmdb': mmdb}
+    return {'status': 'no_db', 'mode': None, 'mmdb': None}
+
+
+def nginx_config_ok():
+    nginx = _nginx_binary()
+    if not nginx:
+        return False
+    try:
+        result = run([nginx, '-t'], stdout=subprocess.PIPE, stderr=subprocess.PIPE, universal_newlines=True, timeout=60)
+    except Exception:
+        return False
+    if result.returncode != 0:
+        print((result.stderr or result.stdout or '').strip())
+    return result.returncode == 0
+
+
+def _conf_hash(conf):
+    return hashlib.sha256(conf.encode()).hexdigest()
+
+
+def write_geoip_failed_marker(conf):
+    try:
+        with open(GEOIP_FAILED_MARKER, 'w') as f:
+            f.write(_conf_hash(conf))
+    except OSError:
+        pass
+
+
+def clear_geoip_failed_marker():
+    try:
+        os.remove(GEOIP_FAILED_MARKER)
+    except OSError:
+        pass
+
+
+def geoip_failed_marker_matches(conf):
+    try:
+        with open(GEOIP_FAILED_MARKER, 'r') as f:
+            return f.read().strip() == _conf_hash(conf)
+    except OSError:
+        return False
 
 
 def load_file_data(filename):

@@ -23,6 +23,7 @@ ensure_ddosnull_whitelisted()
 
 api_handler = ApiHandler()
 
+api_handler.detect_geoip()
 api_handler.get_load_stats()
 api_handler.submit_load_stats()
 
