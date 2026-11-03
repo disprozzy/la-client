@@ -348,6 +348,8 @@ default 0;
         self.restart_required = 0
         self.geoip = getattr(api_handler, 'geoip', None) or {'status': 'no_module', 'mode': None, 'mmdb': None}
         self.geoip_status = self.geoip['status']
+        if getattr(api_handler, 'geoip_module_enabled', False):
+            self.restart_required = 1  # newly added load_module needs a reload
         self.verify_nginx_config()
 
         if os.path.exists(self.filename):
@@ -836,6 +838,12 @@ class ApiHandler():
         """Check whether nginx can resolve $geoip2_data_country_code on this server."""
         try:
             self.geoip = detect_geoip2()
+            if self.geoip['status'] == 'not_loaded':
+                if enable_geoip2_module():
+                    self.geoip_module_enabled = True
+                    self.geoip = detect_geoip2()
+                elif os.path.exists(GEOIP_MODULE_FAILED_MARKER):
+                    self.geoip = {'status': 'config_error', 'mode': None, 'mmdb': None}
         except Exception as e:
             print(f"GeoIP2 detection failed: {e}")
             self.geoip = {'status': 'no_module', 'mode': None, 'mmdb': None}
@@ -1005,6 +1013,10 @@ def ensure_ddosnull_whitelisted():
 
 
 GEOIP_FAILED_MARKER = '/etc/nginx/maps/.ddosnull_geoip_failed'
+GEOIP_MODULE_FAILED_MARKER = '/etc/nginx/maps/.ddosnull_geoip_module_failed'
+GEOIP_MODULE_CONF_NAME = 'geoip2.conf'
+PLESK_MODULES_CONF_DIR = '/etc/nginx/modules.conf.d'
+GEOIP_MODULE_NGINX_CONF_TAG = '# ddosnull: load GeoIP2 module'
 GEOIP_MMDB_CANDIDATES = [
     '/usr/share/GeoIP/GeoLite2-Country.mmdb',
     '/usr/share/GeoIP/GeoIP2-Country.mmdb',
@@ -1140,6 +1152,112 @@ def detect_geoip2():
         if os.path.isfile(mmdb) and os.path.getsize(mmdb) > 0:
             return {'status': 'ok', 'mode': 'ours', 'mmdb': mmdb}
     return {'status': 'no_db', 'mode': None, 'mmdb': None}
+
+
+def _main_context_include_dirs(conf_path, text):
+    """Directories included via `include <dir>/*.conf;` at the top level (main context) of nginx.conf."""
+    text = _strip_comments(text)
+    depth = 0
+    dirs = []
+    for line in text.splitlines():
+        if depth == 0:
+            m = re.match(r'^\s*include\s+["\']?([^"\';\s]+)["\']?\s*;', line)
+            if m:
+                pattern = m.group(1)
+                if not os.path.isabs(pattern):
+                    pattern = os.path.join(os.path.dirname(conf_path), pattern)
+                d, base = os.path.split(pattern)
+                if base == '*.conf' and os.path.isdir(d):
+                    dirs.append(d)
+        depth += line.count('{') - line.count('}')
+    return dirs
+
+
+def enable_geoip2_module():
+    """Load the installed-but-unloaded GeoIP2 dynamic module.
+
+    load_module is only valid in nginx's main context, so it can't go in ddosnull.conf
+    (included inside http {}). Preferred: write geoip2.conf into a directory nginx.conf already
+    includes at the top level (Plesk modules.conf.d, RHEL /usr/share/nginx/modules,
+    Debian modules-enabled, cPanel conf.d/modules). Fallback: prepend a tagged line to nginx.conf.
+    Validated with nginx -t and rolled back on failure; a failure is remembered per
+    nginx build + module so it isn't retried every run.
+    Returns True if the module was enabled (nginx needs a reload).
+    """
+    build_info = _nginx_build_info()
+    so_path = _geoip2_module_file(build_info)
+    if not so_path:
+        return False
+
+    fingerprint = _conf_hash(build_info + so_path)
+    try:
+        with open(GEOIP_MODULE_FAILED_MARKER, 'r') as f:
+            if f.read().strip() == fingerprint:
+                return False
+    except OSError:
+        pass
+
+    # Never touch the config while nginx -t is already failing for other reasons
+    if not nginx_config_ok():
+        print("nginx -t is failing; not enabling the GeoIP2 module.")
+        return False
+
+    m = re.search(r'--conf-path=(\S+)', build_info)
+    conf_path = m.group(1) if m else '/etc/nginx/nginx.conf'
+    try:
+        with open(conf_path, 'r') as f:
+            original = f.read()
+    except OSError:
+        return False
+
+    directive = f'load_module {so_path};\n'
+    dirs = _main_context_include_dirs(conf_path, original)
+    if dirs:
+        real_dirs = [os.path.realpath(d) for d in dirs]
+        target_dir = PLESK_MODULES_CONF_DIR if os.path.realpath(PLESK_MODULES_CONF_DIR) in real_dirs else dirs[0]
+        module_conf = os.path.join(target_dir, GEOIP_MODULE_CONF_NAME)
+        previous = None
+        if os.path.exists(module_conf):
+            with open(module_conf, 'r') as f:
+                previous = f.read()
+        with open(module_conf, 'w') as f:
+            f.write(f'{GEOIP_MODULE_NGINX_CONF_TAG}\n{directive}')
+
+        def rollback():
+            try:
+                if previous is None:
+                    os.remove(module_conf)
+                else:
+                    with open(module_conf, 'w') as f:
+                        f.write(previous)
+            except OSError:
+                pass
+        where = module_conf
+    else:
+        with open(conf_path, 'w') as f:
+            f.write(f'{GEOIP_MODULE_NGINX_CONF_TAG}\n{directive}' + original)
+
+        def rollback():
+            with open(conf_path, 'w') as f:
+                f.write(original)
+        where = conf_path
+
+    if nginx_config_ok():
+        print(f"Enabled the nginx GeoIP2 module ({so_path}) via {where}")
+        try:
+            os.remove(GEOIP_MODULE_FAILED_MARKER)
+        except OSError:
+            pass
+        return True
+
+    rollback()
+    print(f"nginx rejected loading {so_path}; rolled back.")
+    try:
+        with open(GEOIP_MODULE_FAILED_MARKER, 'w') as f:
+            f.write(fingerprint)
+    except OSError:
+        pass
+    return False
 
 
 def nginx_config_ok():
