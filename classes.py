@@ -168,6 +168,7 @@ class Block:
     DISABLED_HOSTS_MAP = '/etc/nginx/maps/disabled_hosts.map'
     BLOCK_WITH_403_MAP = '/etc/nginx/maps/block_with_403.map'
     FAKE_UA_IPS_MAP = '/etc/nginx/maps/fake_ua_ips.map'
+    NETWORK_IPS_MAP = '/etc/nginx/maps/network_ips.map'
     DELISTED_IPS_MAP = '/etc/nginx/maps/delisted_ips.map'
     COUNTRY_SOFT_MAP = '/etc/nginx/maps/country_block.map'
     COUNTRY_HARD_MAP = '/etc/nginx/maps/country_block_403.map'
@@ -241,6 +242,11 @@ geo $remote_addr $is_fake_ua_ip {
 include /etc/nginx/maps/fake_ua_ips.map;
 }
 
+# ---- Network threat intel (IPs banned on several ddosNull servers - challenge only) ----
+geo $remote_addr $is_network_ip {
+include /etc/nginx/maps/network_ips.map;
+}
+
 """
     DDOSNULL_CONF_COMPOSITE = """map "$block_with_403_raw:$is_blacklisted_ua_403_raw:$is_whitelisted_ip:$is_delisted_ip:$is_bot:$is_fake_ua_ip:$is_disabled_host" $block_with_403_base {
 default 0;
@@ -293,11 +299,13 @@ default 0;
 "~^0:1:0:0:0:0$" 1;
 }
 
-# Country soft block: recaptcha unless verified (cookie) or whitelisted, same as DDoS mode.
-map "$needs_recaptcha_base:$is_country_blocked:$is_bot:$has_recaptcha_cookie:$is_whitelisted_ip:$is_whitelisted_url:$is_disabled_host" $needs_recaptcha {
+# Country soft block and network threat intel: recaptcha unless verified (cookie)
+# or whitelisted, same as DDoS mode.
+map "$needs_recaptcha_base:$is_country_blocked:$is_network_ip:$is_bot:$has_recaptcha_cookie:$is_whitelisted_ip:$is_whitelisted_url:$is_disabled_host" $needs_recaptcha {
 default 0;
 "~^1:" 1;
-"~^0:1:0:0:0:0:0$" 1;
+"~^0:1:.:0:0:0:0:0$" 1;
+"~^0:.:1:0:0:0:0:0$" 1;
 }
 """
 
@@ -373,6 +381,7 @@ default 0;
         self.blacklisted_user_agents_403_lines = load_file_data(self.BLACKLISTED_USER_AGENTS_403_MAP)
         self.block_with_403_lines = load_file_data(self.BLOCK_WITH_403_MAP)
         self.fake_ua_ips_lines = load_file_data(self.FAKE_UA_IPS_MAP)
+        self.network_ips_lines = load_file_data(self.NETWORK_IPS_MAP)
         self.country_soft_lines = load_file_data(self.COUNTRY_SOFT_MAP)
         self.country_hard_lines = load_file_data(self.COUNTRY_HARD_MAP)
 
@@ -390,6 +399,7 @@ default 0;
         self.disable_all_blocks = api_handler.disable_all_blocks
         self.networks_block_with_403 = api_handler.networks_block_with_403
         self.fake_ua_ips = api_handler.fake_ua_ips
+        self.network_ips = getattr(api_handler, 'network_ips', None) or []
         self.country_block = getattr(api_handler, 'country_block', None) or {'mode': 'off'}
         
     def verify_nginx_config(self):
@@ -456,7 +466,14 @@ default 0;
             print(f"Created {self.FAKE_UA_IPS_MAP}")
             self.restart_required = 1
 
-        # 5c. Ensure country block map files exist
+        # 5c. Ensure network_ips.map exists (before ddosnull.conf references it)
+        if not os.path.exists(self.NETWORK_IPS_MAP):
+            with open(self.NETWORK_IPS_MAP, 'w') as f:
+                f.write("default 0;\n")
+            print(f"Created {self.NETWORK_IPS_MAP}")
+            self.restart_required = 1
+
+        # 5d. Ensure country block map files exist
         for country_map in (self.COUNTRY_SOFT_MAP, self.COUNTRY_HARD_MAP):
             if not os.path.exists(country_map):
                 with open(country_map, 'w') as f:
@@ -721,6 +738,13 @@ default 0;
         expected = list(dict.fromkeys(f"{ip} 1;" for ip in self.fake_ua_ips))
         self._rebuild_map_file(self.FAKE_UA_IPS_MAP, 'fake_ua_ips_lines', expected, label="fake_ua_ips")
 
+    def process_network_ips(self):
+        """Network threat intel: IPs banned on several ddosNull servers get a
+        challenge here. Whitelisted, delisted and this server's own IP are skipped."""
+        skip = set(self.whitelisted_ips) | set(self.delisted_ips) | {self.server_ip}
+        expected = list(dict.fromkeys(f"{ip} 1;" for ip in self.network_ips if ip not in skip))
+        self._rebuild_map_file(self.NETWORK_IPS_MAP, 'network_ips_lines', expected, label="network_ips")
+
     def process_country_block(self):
         """Populate the soft (captcha) and hard (403) country maps.
 
@@ -931,6 +955,7 @@ class ApiHandler():
         self.disable_all_blocks = self.response_data.get('disable_all_blocks')
         self.networks_block_with_403 = self.response_data.get('block_with_403', [])
         self.fake_ua_ips = self.response_data.get('fake_ua_ips', [])
+        self.network_ips = self.response_data.get('network_ips', [])
         self.country_block = self.response_data.get('country_block') or {'mode': 'off'}
         if not hasattr(self, 'geoip'):
             self.detect_geoip()
@@ -946,6 +971,7 @@ class ApiHandler():
         block.set_ddos_mode()
         block.process_block_with_403()
         block.process_fake_ua_ips()
+        block.process_network_ips()
         block.process_country_block()
         block.restart_nginx()
         
